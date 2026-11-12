@@ -37,18 +37,6 @@ namespace RLGSC {
 			IncPlayerCounter<&PlayerData::matchDemos>(bumper, userInfo);
 	}
 
-	FList2 Gym::obsTupleToFList2(const std::vector<ObsTuple>& tuples) {
-		// Flatten obs tuple: for each player, concatenate q, kv, m into a single FList
-		FList2 result(tuples.size());
-		for (int i = 0; i < (int)tuples.size(); i++) {
-			const auto& [q, kv, m] = tuples[i];
-			result[i] = q;
-			result[i].insert(result[i].end(), kv.begin(), kv.end());
-			result[i].insert(result[i].end(), m.begin(), m.end());
-		}
-		return result;
-	}
-
 	Gym::Gym(Match* match, int tickSkip, CarConfig carConfig, GameMode gameMode, MutatorConfig mutatorConfig) :
 		match(match), tickSkip(tickSkip) {
 		arena = Arena::Create(gameMode);
@@ -73,9 +61,7 @@ namespace RLGSC {
 		prevState = resetState;
 		eventTracker.ResetPersistentInfo();
 
-		auto obsTuples = match->BuildObservations(resetState);
-		FList2 obs = obsTupleToFList2(obsTuples);
-		return obs;
+		return match->BuildObservations(resetState);
 	}
 
 	Gym::StepResult Gym::Step(const ActionParser::Input& actionsData) {
@@ -101,8 +87,7 @@ namespace RLGSC {
 			totalSteps++;
 		}
 
-		auto obsTuples = match->BuildObservations(state);
-		FList2 obs = obsTupleToFList2(obsTuples);
+		FList2 obs = match->BuildObservations(state);
 		bool done = match->IsDone(state);
 		FList rewards = match->GetRewards(state, done);
 		prevState = state;

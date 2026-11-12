@@ -12,20 +12,30 @@
 
 namespace RLGSC {
 
+	// Simple float clamp used by the reward terms below
+	inline float clamp(float v, float lo, float hi) {
+		return v < lo ? lo : (v > hi ? hi : v);
+	}
+
 	// Base class for reward terms with delta/non-delta support
 	class RewardTerm : public RewardFunction {
 	public:
 		std::string name;
 		bool isDelta; // subtract previous tick's raw vector
+		float prevRaw = 0.0f;
 
 		RewardTerm(const std::string& name, bool isDelta = true)
 			: name(name), isDelta(isDelta) {}
 
 		virtual float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) = 0;
-		float computeRawScalar(const PlayerData& player, const GameState& state, const Action& prevAction);
 
-	protected:
-		float prevRaw = 0.0f;
+		virtual float computeRawScalar(const PlayerData& player, const GameState& state, const Action& prevAction) {
+			float* r = computeRaw(player, state, prevAction);
+			return isDelta ? (r[0] - prevRaw) : r[0];
+		}
+
+		// Capture raw for delta terms (called by ComposedReward after each step)
+		void captureRaw(float raw) { prevRaw = raw; }
 
 		virtual void Reset(const GameState& initialState) override {
 			RewardFunction::Reset(initialState);
@@ -38,8 +48,6 @@ namespace RLGSC {
 				// prevRaw will be set at end of step by the caller
 			}
 		}
-
-		void captureRaw(float raw) { prevRaw = raw; }
 	};
 
 	// ============================================================================
@@ -50,7 +58,7 @@ namespace RLGSC {
 		GoalTerm() : RewardTerm("goal", true) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
-			static float raw[1] = { 0.0f };
+			static thread_local float raw[1] = { 0.0f };
 			if (player.team == RS_TEAM_FROM_Y(state.ballState.pos.y)) {
 				// On the team that scored
 				float distToGoal = fabs(state.ballState.pos.y) - RLConst::SOCCAR_GOAL_SCORE_BASE_THRESHOLD_Y / 2.0f;
@@ -77,7 +85,7 @@ namespace RLGSC {
 		WinProbTerm() : RewardTerm("win_prob", false) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
-			static float raw[1] = { 0.0f };
+			static thread_local float raw[1] = { 0.0f };
 			int myScore = state.scoreLine[(int)player.team];
 			int oppScore = state.scoreLine[(int)RS_OPPOSITE_TEAM(player.team)];
 			int ticksLeft = 60 * 120; // 60 seconds in ticks (default)
@@ -103,7 +111,7 @@ namespace RLGSC {
 		BallHalfTerm() : RewardTerm("ball_half", true) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
-			static float raw[1] = { 0.0f };
+			static thread_local float raw[1] = { 0.0f };
 			float ballY = state.ballState.pos.y;
 			if (player.team == Team::BLUE) {
 				raw[0] = clamp(ballY / CommonValues::BACK_WALL_Y, -1.0f, 1.0f);
@@ -127,8 +135,8 @@ namespace RLGSC {
 		ProximityTerm() : RewardTerm("proximity", false) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
-			static float raw[1] = { 0.0f };
-			float dist = (state.ballState.pos - player.carState.pos).len();
+			static thread_local float raw[1] = { 0.0f };
+			float dist = (state.ballState.pos - player.carState.pos).Length();
 			raw[0] = exp(-dist / 1000.0f);
 			return raw;
 		}
@@ -147,10 +155,10 @@ namespace RLGSC {
 		AlignmentTerm() : RewardTerm("alignment", true) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
-			static float raw[1] = { 0.0f };
+			static thread_local float raw[1] = { 0.0f };
 			Vec toBall = state.ballState.pos - player.carState.pos;
-			toBall = toBall.normalized();
-			float dot = toBall.dot(player.carState.rotMat.forward);
+			toBall = toBall.Normalized();
+			float dot = toBall.Dot(player.carState.rotMat.forward);
 			raw[0] = (dot + 1.0f) / 2.0f; // map [-1,1] -> [0,1]
 			return raw;
 		}
@@ -169,7 +177,7 @@ namespace RLGSC {
 		BoostTerm() : RewardTerm("boost", false) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
-			static float raw[1] = { 0.0f };
+			static thread_local float raw[1] = { 0.0f };
 			raw[0] = player.boostFraction;
 			return raw;
 		}
@@ -188,7 +196,7 @@ namespace RLGSC {
 		DemoTerm() : RewardTerm("demo", false) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
-			static float raw[1] = { 0.0f };
+			static thread_local float raw[1] = { 0.0f };
 			raw[0] = (player.matchDemos > 0) ? 1.0f : 0.0f;
 			return raw;
 		}
@@ -207,7 +215,7 @@ namespace RLGSC {
 		AngVelTerm() : RewardTerm("ang_vel", false) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
-			static float raw[1] = { 0.0f };
+			static thread_local float raw[1] = { 0.0f };
 			const auto& cs = player.carState;
 			float angVelMag = sqrtf(cs.angVel.x * cs.angVel.x + cs.angVel.y * cs.angVel.y + cs.angVel.z * cs.angVel.z);
 			raw[0] = clamp(angVelMag / RLConst::CAR_MAX_ANG_SPEED, 0.0f, 1.0f);
@@ -228,7 +236,7 @@ namespace RLGSC {
 		GrassTerm() : RewardTerm("grass", true) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
-			static float raw[1] = { 0.0f };
+			static thread_local float raw[1] = { 0.0f };
 			if (player.carState.isOnGround && !player.carState.hasJumped) {
 				raw[0] = 1.0f;
 			} else {
@@ -251,7 +259,7 @@ namespace RLGSC {
 		TouchHeightTerm() : RewardTerm("touch_height", false) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
-			static float raw[1] = { 0.0f };
+			static thread_local float raw[1] = { 0.0f };
 			if (player.ballTouchedTick) {
 				raw[0] = clamp(state.ballState.pos.z / CommonValues::CEILING_Z, 0.0f, 1.0f);
 			} else {
@@ -274,7 +282,7 @@ namespace RLGSC {
 		FlipResetTerm() : RewardTerm("flip_reset", true) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
-			static float raw[1] = { 0.0f };
+			static thread_local float raw[1] = { 0.0f };
 			if (player.hasFlip && !player.carState.hasFlipped) {
 				raw[0] = 1.0f;
 			} else {
@@ -297,9 +305,9 @@ namespace RLGSC {
 		ControlTouchTerm() : RewardTerm("control_touch", false) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
-			static float raw[1] = { 0.0f };
+			static thread_local float raw[1] = { 0.0f };
 			if (player.ballTouchedTick) {
-				float speed = player.carState.vel.len();
+				float speed = player.carState.vel.Length();
 				raw[0] = clamp(speed / RLConst::CAR_MAX_SPEED, 0.0f, 1.0f);
 			} else {
 				raw[0] = 0.0f;
@@ -321,9 +329,9 @@ namespace RLGSC {
 		LongRangeGoalTerm() : RewardTerm("long_range_goal", false) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
-			static float raw[1] = { 0.0f };
+			static thread_local float raw[1] = { 0.0f };
 			if (player.ballTouchedTick) {
-				float dist = (state.ballState.pos - player.carState.pos).len();
+				float dist = (state.ballState.pos - player.carState.pos).Length();
 				raw[0] = (dist > 3000.0f) ? 1.0f : 0.0f;
 			} else {
 				raw[0] = 0.0f;
@@ -345,7 +353,7 @@ namespace RLGSC {
 		ChallengeWinTerm() : RewardTerm("challenge_win", false) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
-			static float raw[1] = { 0.0f };
+			static thread_local float raw[1] = { 0.0f };
 			int myScore = state.scoreLine[(int)player.team];
 			int oppScore = state.scoreLine[(int)RS_OPPOSITE_TEAM(player.team)];
 			raw[0] = (myScore > oppScore) ? 1.0f : 0.0f;
@@ -366,8 +374,8 @@ namespace RLGSC {
 		SpeedTerm() : RewardTerm("speed", false) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
-			static float raw[1] = { 0.0f };
-			float speed = player.carState.vel.len();
+			static thread_local float raw[1] = { 0.0f };
+			float speed = player.carState.vel.Length();
 			raw[0] = clamp(speed / RLConst::CAR_MAX_SPEED, 0.0f, 1.0f);
 			return raw;
 		}
@@ -386,7 +394,7 @@ namespace RLGSC {
 		SaveTerm() : RewardTerm("save", false) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
-			static float raw[1] = { 0.0f };
+			static thread_local float raw[1] = { 0.0f };
 			float goalY = (player.team == Team::BLUE) ? -RLConst::SOCCAR_GOAL_SCORE_BASE_THRESHOLD_Y / 2.0f
 			                                           : RLConst::SOCCAR_GOAL_SCORE_BASE_THRESHOLD_Y / 2.0f;
 			float distToGoal = fabs(state.ballState.pos.y - goalY);
@@ -408,9 +416,9 @@ namespace RLGSC {
 		ShadowTerm() : RewardTerm("shadow", false) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
-			static float raw[1] = { 0.0f };
+			static thread_local float raw[1] = { 0.0f };
 			// Simplified: proximity to ball when on defense
-			float dist = (state.ballState.pos - player.carState.pos).len();
+			float dist = (state.ballState.pos - player.carState.pos).Length();
 			raw[0] = exp(-dist / 800.0f);
 			return raw;
 		}
@@ -429,7 +437,7 @@ namespace RLGSC {
 		BoostDenialTerm() : RewardTerm("boost_denial", false) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
-			static float raw[1] = { 0.0f };
+			static thread_local float raw[1] = { 0.0f };
 			// Simplified: proximity to large boost pads when opponent is nearby
 			raw[0] = player.boostFraction; // proxy: have boost to pick up
 			return raw;
@@ -449,7 +457,7 @@ namespace RLGSC {
 		WallPlayTerm() : RewardTerm("wall_play", false) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
-			static float raw[1] = { 0.0f };
+			static thread_local float raw[1] = { 0.0f };
 			raw[0] = player.carState.isOnGround ? 0.0f : 1.0f; // proxy: in air (possibly after wall play)
 			return raw;
 		}
@@ -468,14 +476,14 @@ namespace RLGSC {
 		TightAngleTerm() : RewardTerm("tight_angle", false) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
-			static float raw[1] = { 0.0f };
+			static thread_local float raw[1] = { 0.0f };
 			Vec toGoal;
 			if (player.team == Team::BLUE) {
 				toGoal = Vec(0, RLConst::SOCCAR_GOAL_SCORE_BASE_THRESHOLD_Y / 2.0f, 0) - player.carState.pos;
 			} else {
 				toGoal = Vec(0, -RLConst::SOCCAR_GOAL_SCORE_BASE_THRESHOLD_Y / 2.0f, 0) - player.carState.pos;
 			}
-			float angle = acos(clamp(toGoal.dot(player.carState.rotMat.forward) / toGoal.len(), -1.0f, 1.0f));
+			float angle = acos(clamp(toGoal.Dot(player.carState.rotMat.forward) / toGoal.Length(), -1.0f, 1.0f));
 			raw[0] = (angle > M_PI_4) ? 1.0f : 0.0f; // tight angle bonus
 			return raw;
 		}
@@ -494,7 +502,7 @@ namespace RLGSC {
 		DoubleTapTerm() : RewardTerm("double_tap", true) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
-			static float raw[1] = { 0.0f };
+			static thread_local float raw[1] = { 0.0f };
 			raw[0] = (player.carState.isBoosting && player.carState.boostingTime > 0.5f) ? 1.0f : 0.0f;
 			return raw;
 		}
@@ -513,10 +521,10 @@ namespace RLGSC {
 		StealTerm() : RewardTerm("steal", false) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
-			static float raw[1] = { 0.0f };
+			static thread_local float raw[1] = { 0.0f };
 			if (state.attachInfo.active && state.attachInfo.attachedCarId != player.carId) {
 				// Ball is attached to a different car - proximity bonus for stealing
-				float dist = (state.ballState.pos - player.carState.pos).len();
+				float dist = (state.ballState.pos - player.carState.pos).Length();
 				raw[0] = exp(-dist / 500.0f);
 			} else if (state.attachInfo.active && state.attachInfo.attachedCarId == player.carId) {
 				// Just became carrier
@@ -541,7 +549,7 @@ namespace RLGSC {
 		AerialTerm() : RewardTerm("aerial", false) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
-			static float raw[1] = { 0.0f };
+			static thread_local float raw[1] = { 0.0f };
 			if (player.ballTouchedTick && !player.carState.isOnGround) {
 				raw[0] = 1.0f;
 			} else {
@@ -564,7 +572,7 @@ namespace RLGSC {
 		PassChainTerm() : RewardTerm("pass_chain", false) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
-			static float raw[1] = { 0.0f };
+			static thread_local float raw[1] = { 0.0f };
 			if (player.matchAssists > 0) {
 				raw[0] = 1.0f;
 			} else {
@@ -583,7 +591,7 @@ namespace RLGSC {
 	// TERM_REGISTRY: all 24 terms
 	// ============================================================================
 	struct TermRegistry {
-		static std::unordered_map<std::string, std::function<RewardTerm*>> getTerms() {
+		static std::unordered_map<std::string, std::function<RewardTerm*()>> getTerms() {
 			return {
 				{"goal", []() { return new GoalTerm(); }},
 				{"win_prob", []() { return new WinProbTerm(); }},
@@ -659,7 +667,7 @@ namespace RLGSC {
 				// Team spirit blending
 				if (teamSpirit != 0.0f) {
 					float teamReward = 0.0f;
-					for (auto* p : state.players) {
+					for (const PlayerData& p : state.players) {
 						if (p.team == player.team) {
 							for (int i = 0; i < (int)terms.size(); i++) {
 								teamReward += terms[i]->computeRawScalar(p, state, prevAction) * termWeights[terms[i]->name];
