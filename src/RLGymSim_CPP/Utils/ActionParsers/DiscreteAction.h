@@ -13,8 +13,8 @@ namespace RLGSC {
 
 		virtual ActionSet ParseActions(const Input& actionsData, const GameState& gameState) {
 			ActionSet result;
-			for (int idx : actionsData)
-				result.push_back(actions[idx]);
+			for (float f : actionsData)
+				result.push_back(actions[(int)f]);
 			return result;
 		}
 

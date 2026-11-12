@@ -22,7 +22,7 @@ void _BuildBoostPadIndexMap(Arena* arena) {
 	for (int i = 0; i < CommonValues::BOOST_LOCATIONS_AMOUNT; i++) {
 		Vec targetPos = CommonValues::BOOST_LOCATIONS[i];
 		for (int j = 0; j < arena->_boostPads.size(); j++) {
-			Vec padPos = arena->_boostPads[j]->pos;
+			Vec padPos = arena->_boostPads[j]->config.pos;
 
 			if (padPos.DistSq2D(targetPos) < 10) {
 				if (!found[i]) {
@@ -56,7 +56,13 @@ void RLGSC::GameState::UpdateFromArena(Arena* arena) {
 	ballInv = ball.Invert();
 
 	// Copy attach info for custom modes (SPIKE_RUSH / GRIDIRON)
-	attachInfo = ballState.attachInfo;
+	// (RLGSC::AttachInfo is a field-for-field mirror of RocketSim::BallState::AttachInfo)
+	attachInfo.attachedCarId = ballState.attachInfo.attachedCarId;
+	attachInfo.lastCarrierId = ballState.attachInfo.lastCarrierId;
+	attachInfo.localOffset   = ballState.attachInfo.localOffset;
+	attachInfo.engageTimer   = ballState.attachInfo.engageTimer;
+	attachInfo.releaseCooldown = ballState.attachInfo.releaseCooldown;
+	attachInfo.active        = ballState.attachInfo.active;
 
 	players.resize(arena->_cars.size());
 

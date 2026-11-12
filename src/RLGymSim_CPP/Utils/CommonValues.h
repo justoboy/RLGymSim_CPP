@@ -28,6 +28,7 @@ namespace RLGSC {
 			BALL_RADIUS = 92.75, // :nerd::point_up: "erm it is actually 91.25"
 
 			BALL_MAX_SPEED = 6000,
+			BALL_MAX_ANG_VEL = 6, // Mirrors RLConst::BALL_MAX_ANG_SPEED
 			CAR_MAX_SPEED = 2300,
 			SUPERSONIC_THRESHOLD = 2200,
 			CAR_MAX_ANG_VEL = 5.5,

@@ -105,16 +105,16 @@ void runScenario(const std::string& name, const std::vector<ScenarioStep>& steps
 
     Match match(rewardFn, terminalConds, obsBuilder, actionParser, stateSetter, teamSize, true);
 
+    // Arena mode is fixed at creation; all steps in a scenario share one mode (steps[0].mode)
+    GameMode scenarioMode = steps[0].mode;
+    obsBuilder->activeMode = scenarioMode;
+
     // Create gym
-    Gym gym(&match, 4, CAR_CONFIG_OCTANE, GameMode::SOCCAR);
+    Gym gym(&match, 4, CAR_CONFIG_OCTANE, scenarioMode);
 
     // Run scenario
     for (const auto& step : steps) {
         std::cout << "  Step: " << step.name << " (" << step.ticks << " ticks) ..." << std::flush;
-
-        // Set mode
-        gym.arena->setMode((int)step.mode);
-        obsBuilder->activeMode = (TemporalObsBuilder::GameMode)step.mode;
 
         // Reset
         auto obs = gym.Reset();
@@ -171,6 +171,9 @@ void runScenario(const std::string& name, const std::vector<ScenarioStep>& steps
 
 int main() {
     std::cout << "=== RLGymSim_CPP Scenario Runner ===" << std::endl;
+
+    // Initialize RocketSim with collision meshes (must happen before Arena creation)
+    RocketSim::Init("collision_meshes", true);
 
     // Run scenarios
     runScenario("Soccar", createSoccarScenario(), 1);

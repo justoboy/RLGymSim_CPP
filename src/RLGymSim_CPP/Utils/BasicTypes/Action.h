@@ -7,6 +7,11 @@ namespace RLGSC {
 			throttle, steer,
 			pitch, yaw, roll,
 			jump, boost, handbrake;
+
+		// SPIKE_RUSH release button. Deliberately NOT part of the begin()/end() range
+		// (legacy obs builders only expose the first 8 elements, see ELEM_AMOUNT).
+		float powerup = 0;
+
 		constexpr static size_t ELEM_AMOUNT = 8;
 
 		Action() = default;
@@ -20,6 +25,7 @@ namespace RLGSC {
 			jump = controls.jump;
 			boost = controls.boost;
 			handbrake = controls.handbrake;
+			powerup = controls.powerup;
 		}
 
 		Action(
@@ -29,6 +35,17 @@ namespace RLGSC {
 		) : throttle(throttle), steer(steer), 
 			pitch(pitch), yaw(yaw), roll(roll),
 			jump(jump), boost(boost), handbrake(handbrake) {
+		}
+
+		Action(
+			float throttle, float steer,
+			float pitch, float yaw, float roll,
+			float jump, float boost, float handbrake,
+			float powerup
+		) : throttle(throttle), steer(steer), 
+			pitch(pitch), yaw(yaw), roll(roll),
+			jump(jump), boost(boost), handbrake(handbrake),
+			powerup(powerup) {
 		}
 
 		explicit operator CarControls() const {
@@ -42,6 +59,7 @@ namespace RLGSC {
 			result.boost = boost == 1;
 			result.jump = jump == 1;
 			result.handbrake = handbrake == 1;
+			result.powerup = powerup == 1;
 			return result;
 		}
 

@@ -9,8 +9,8 @@ namespace RLGSC {
 		obsBuilder->Reset(initialState);
 	}
 
-	std::vector<ObsTuple> Match::BuildObservations(const GameState& state) {
-		std::vector<ObsTuple> results(state.players.size());
+	FList2 Match::BuildObservations(const GameState& state) {
+		FList2 results(state.players.size());
 
 		obsBuilder->PreStep(state);
 

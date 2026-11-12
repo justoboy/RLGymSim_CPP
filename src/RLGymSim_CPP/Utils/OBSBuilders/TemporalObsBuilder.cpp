@@ -14,7 +14,7 @@ void TemporalObsBuilder::TemporalBuffer::resize(int frames, int entities, int kv
 	F = frames;
 	E = entities;
 	data.assign(frames * entities * kvDims, 0.0f);
-	slotType.resize(entities, EntityType::BALL);
+	slotType.resize(entities, (int)EntityType::BALL);
 	slotCarId.resize(entities, -1);
 }
 
@@ -79,10 +79,10 @@ void TemporalObsBuilder::PreStep(const GameState& state) {
 }
 
 // ============================================================================
-// BuildOBS: produces (q, kv, mask) tuple
+// BuildOBS: produces flattened obs for this player: q ++ kv ++ m
 // ============================================================================
 
-std::tuple<FList, FList, FList> TemporalObsBuilder::BuildOBS(
+FList TemporalObsBuilder::BuildOBS(
 	const PlayerData& player,
 	const GameState& state,
 	const Action& prevAction
@@ -92,7 +92,12 @@ std::tuple<FList, FList, FList> TemporalObsBuilder::BuildOBS(
 	FList kv = buildKeyValue(state);
 	FList m = buildMask(state);
 
-	return std::make_tuple(std::move(q), std::move(kv), std::move(m));
+	FList obs;
+	obs.reserve(q.size() + kv.size() + m.size());
+	obs.insert(obs.end(), q.begin(), q.end());
+	obs.insert(obs.end(), kv.begin(), kv.end());
+	obs.insert(obs.end(), m.begin(), m.end());
+	return obs;
 }
 
 // ============================================================================
@@ -135,12 +140,12 @@ int TemporalObsBuilder::computeQueryFeatures(const GameState& state) {
 // rotateRelative: arctan2 -> cos/sin rotation kernel
 // ============================================================================
 
-TemporalObsBuilder::RotatedVec TemporalObsBuilder::rotateRelative(
+	TemporalObsBuilder::RotatedVec TemporalObsBuilder::rotateRelative(
 	const Vec& relPos, const Vec& forward, const Vec& right, const Vec& up) {
 	// Project relative position onto car's local axes
-	float fx = relPos.dot(forward);
-	float rx = relPos.dot(right);
-	float ux = relPos.dot(up);
+	float fx = relPos.Dot(forward);
+	float rx = relPos.Dot(right);
+	float ux = relPos.Dot(up);
 	return RotatedVec(fx, rx, ux);
 }
 
@@ -281,7 +286,7 @@ void TemporalObsBuilder::extractPadFeatures(
 	memset(base, 0, kvDims * sizeof(float));
 
 	// Boost pad positions are from CommonValues::BOOST_LOCATIONS
-	if (padIdx >= (int)CommonValues::BOOST_LOCATIONS.size()) return;
+	if (padIdx >= CommonValues::BOOST_LOCATIONS_AMOUNT) return;
 
 	const Vec& pos = CommonValues::BOOST_LOCATIONS[padIdx];
 
@@ -383,7 +388,7 @@ FList TemporalObsBuilder::buildQuery(const PlayerData& player, const GameState& 
 	q += clamp(rotRel.z / CommonValues::CEILING_Z, -1.0f, 1.0f);
 
 	// Ball distance
-	float ballDist = relPos.len();
+	float ballDist = relPos.Length();
 	q += clamp(ballDist / 6000.0f, 0.0f, 1.0f);
 
 	// Ball velocity (normalized)

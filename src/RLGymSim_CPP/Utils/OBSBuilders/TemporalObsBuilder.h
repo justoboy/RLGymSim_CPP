@@ -1,12 +1,14 @@
 #pragma once
 #include "OBSBuilder.h"
 #include "../Gamestates/GameState.h"
-#include <tuple>
 
-// TemporalObsBuilder: produces the (q, kv, mask) tuple used by custombot.
-// - q: query tensor  (batch, seq, query_features)
-// - kv: key/value tensor (batch, F*n_bc + MAX_BOOST_PADS, kv_features)
-// - m: attention mask (batch, F*n_bc + MAX_BOOST_PADS)
+// TemporalObsBuilder: produces the flattened (q ++ kv ++ m) obs used by custombot.
+// - q: query tensor  (query_features)
+// - kv: key/value tensor (F*n_bc + MAX_BOOST_PADS) * kv_features, flattened
+// - m: attention mask (F*n_bc + MAX_BOOST_PADS), flattened
+//
+// The flattened per-player FList is q ++ kv ++ m; the learner knows the section widths
+// from computeQueryFeatures()/config.
 //
 // Entity feature layout (30 dims each):
 //   [0..2]   pos (normalized)
@@ -22,17 +24,6 @@
 //   [23..29] zero-padded
 
 namespace RLGSC {
-
-	// Game mode enum (mirrors RocketSim/src/Sim/GameMode.h)
-	enum class GameMode : int {
-		SOCCAR = 0,
-		HOOPS,
-		HEATSEEKER,
-		SNOWDAY,
-		SPIKE_RUSH,
-		GRIDIRON,
-		DROPSHOT,
-	};
 
 	// Temporal entity type
 	enum class EntityType : int {
@@ -86,11 +77,13 @@ namespace RLGSC {
 
 		void Reset(const GameState& initialState) override;
 		void PreStep(const GameState& state) override;
-		std::tuple<FList, FList, FList> BuildOBS(
+
+		// Returns flattened obs for this player: q ++ kv ++ m
+		FList BuildOBS(
 			const PlayerData& player,
 			const GameState& state,
 			const Action& prevAction
-		);
+		) override;
 
 		// Query features computation (called internally)
 		int computeQueryFeatures(const GameState& state);
@@ -98,9 +91,11 @@ namespace RLGSC {
 	private:
 		// Entity feature extraction
 		void extractEntityFeatures(const PlayerData& player, const GameState& state,
-		                           int frameIdx, int slotIdx, float* out);
-		void extractBallFeatures(const BallState& ballState, int frameIdx, int slotIdx, float* out);
-		void extractPadFeatures(const GameState& state, int padIdx, int frameIdx, int slotIdx, float* out);
+		                           int frameIdx, int slotIdx, float* out, int E, int kvDims);
+		void extractBallFeatures(const BallState& ballState, int frameIdx, int slotIdx,
+		                         float* out, int E, int kvDims);
+		void extractPadFeatures(const GameState& state, int padIdx, int frameIdx, int slotIdx,
+		                        float* out, int E, int kvDims);
 
 		// Self-relative frame math (arctan2 -> cos/sin rotation kernel)
 		struct RotatedVec {

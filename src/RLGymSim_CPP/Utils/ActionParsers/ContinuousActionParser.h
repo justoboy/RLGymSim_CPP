@@ -45,7 +45,7 @@ namespace RLGSC {
 
 			// actionsData is a flat vector of [nAgents * N_CONTROLS] floats
 			for (int i = 0; i < nAgents; i++) {
-				const float* vec = actionsData.begin() + i * N_CONTROLS;
+				const float* vec = actionsData.data() + i * N_CONTROLS;
 				float* decoded = decode_controls(vec);
 
 				// Build CarControls from decoded values
@@ -60,10 +60,12 @@ namespace RLGSC {
 				ctrl.handbrake = (decoded[7] > 0.5f);
 				ctrl.powerup = (decoded[8] > 0.5f); // release button for SPIKE_RUSH
 
-				// Store as Action for prevActions tracking
+				// Store as Action for prevActions tracking (powerup included so
+				// the SPIKE_RUSH release button survives the round-trip)
 				actions[i] = Action(
 					ctrl.throttle, ctrl.steer, ctrl.pitch, ctrl.yaw, ctrl.roll,
-					ctrl.jump ? 1.0f : 0.0f, ctrl.boost ? 1.0f : 0.0f, ctrl.handbrake ? 1.0f : 0.0f
+					ctrl.jump ? 1.0f : 0.0f, ctrl.boost ? 1.0f : 0.0f, ctrl.handbrake ? 1.0f : 0.0f,
+					ctrl.powerup ? 1.0f : 0.0f
 				);
 
 				// Repeat this control block into the arena's input buffer

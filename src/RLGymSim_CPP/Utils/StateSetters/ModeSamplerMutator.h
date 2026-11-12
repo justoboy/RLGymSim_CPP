@@ -4,19 +4,9 @@
 
 // State setters ported from custombot/custombot/mode_setters.py:
 // TeamConfigMutator, ModeSamplerMutator, SpawnCurriculumMutator.
+// NOTE: uses RocketSim::GameMode (via Framework.h's `using namespace RocketSim`).
 
 namespace RLGSC {
-
-	// Game mode enum (mirrors RocketSim/src/Sim/GameMode.h)
-	enum class GameMode : int {
-		SOCCAR = 0,
-		HOOPS,
-		HEATSEEKER,
-		SNOWDAY,
-		SPIKE_RUSH,
-		GRIDIRON,
-		DROPSHOT,
-	};
 
 	// Mutable holder for the active per-episode team config (n_blue, n_orange).
 	struct TeamConfigHolder {
@@ -30,7 +20,9 @@ namespace RLGSC {
 		GameMode mode = GameMode::SOCCAR;
 	};
 
-	// TeamConfigMutator: spawns the active team's cars into state.cars from TeamConfigHolder.
+	// TeamConfigMutator: resets to a random kickoff and captures the resulting state.
+	// (Cars are already spawned into the arena by the Gym constructor based on teamSize,
+	//  so this setter only handles the kickoff reset itself.)
 	class TeamConfigMutator : public StateSetter {
 	public:
 		TeamConfigHolder* holder;
@@ -38,102 +30,35 @@ namespace RLGSC {
 		TeamConfigMutator(TeamConfigHolder* holder) : holder(holder) {}
 
 		virtual GameState ResetState(Arena* arena) override {
-			GameState state(arena);
-
-			// Clear existing players
-			state.players.clear();
-
-			// Spawn blue cars
-			for (int i = 0; i < holder->n_blue; i++) {
-				PlayerData p;
-				p.carId = (uint32_t)(i + 1);
-				p.team = Team::BLUE;
-				p.carState = CarState();
-				p.carState.pos = Vec(-2048.0f, -2560.0f, RLConst::CAR_SPAWN_REST_Z);
-				p.carState.rotMat = RotMat::fromYaw(M_PI_4 * 2.0f);
-				p.boostFraction = 0.0f;
-				p.hasJump = true;
-				p.hasFlip = true;
-				p.ballTouchedStep = false;
-				p.ballTouchedTick = false;
-				state.players.push_back(p);
-			}
-
-			// Spawn orange cars
-			for (int i = 0; i < holder->n_orange; i++) {
-				PlayerData p;
-				p.carId = (uint32_t)(i + holder->n_blue + 1);
-				p.team = Team::ORANGE;
-				p.carState = CarState();
-				p.carState.pos = Vec(2048.0f, 2560.0f, RLConst::CAR_SPAWN_REST_Z);
-				p.carState.rotMat = RotMat::fromYaw(M_PI_4 * 0.0f);
-				p.boostFraction = 0.0f;
-				p.hasJump = true;
-				p.hasFlip = true;
-				p.ballTouchedStep = false;
-				p.ballTouchedTick = false;
-				state.players.push_back(p);
-			}
-
-			return state;
+			(void)holder; // team sizes are fixed at Gym construction (Match::playerAmount check)
+			arena->ResetToRandomKickoff();
+			return GameState(arena);
 		}
 	};
 
-	// ModeSamplerMutator: per-episode mode sampler + native routing.
+	// ModeSamplerMutator: per-episode mode sampler. The arena's game mode is fixed at
+	// Arena::Create() time and cannot be switched at runtime, so the sampled mode is
+	// stored in the ModeHolder for the caller to construct the next episode's Gym with.
 	class ModeSamplerMutator : public StateSetter {
 	public:
 		ModeHolder* modeHolder;
-		Arena* arena; // for mode routing
 		std::vector<GameMode> modes;
 		std::vector<float> weights;
 		std::mt19937 rng;
 
-		// Default mutator levels (for sampling)
-		float gravityLevels[5] = {0.5f, 0.75f, 1.0f, 1.25f, 1.5f};
-		float boostConsumptionLevels[5] = {0.5f, 0.75f, 1.0f, 1.25f, 1.5f};
-		float boostStrengthLevels[5] = {0.5f, 0.75f, 1.0f, 1.25f, 1.5f};
-		float ballMaxSpeedLevels[5] = {0.75f, 0.875f, 1.0f, 1.125f, 1.25f};
-		float ballSizeLevels[5] = {0.75f, 0.875f, 1.0f, 1.125f, 1.25f};
-		float ballBouncinessLevels[5] = {0.75f, 0.875f, 1.0f, 1.125f, 1.25f};
-
-		ModeSamplerMutator(ModeHolder* holder, Arena* arena,
+		ModeSamplerMutator(ModeHolder* holder,
 		                   const std::vector<GameMode>& modes,
 		                   const std::vector<float>& weights,
-		                   bool mutators = false, uint32_t seed = 0)
-			: modeHolder(holder), arena(arena), modes(modes), weights(weights), rng(seed) {
+		                   uint32_t seed = 0)
+			: modeHolder(holder), modes(modes), weights(weights), rng(seed) {
 			assert(modes.size() == weights.size());
 		}
 
 		virtual GameState ResetState(Arena* arena) override {
-			// Sample a mode
-			std::discrete_distribution<int> dist(modes.begin(), modes.end());
+			// Sample a mode with the configured weights
+			std::discrete_distribution<int> dist(weights.begin(), weights.end());
 			int idx = dist(rng);
-			GameMode sampledMode = modes[idx];
-			weights; // suppress warning
-
-			modeHolder->mode = sampledMode;
-
-			// Route mode into arena (set game mode)
-			if (arena) {
-				// Cast to underlying int for Arena::setMode
-				arena->setMode((int)sampledMode);
-			}
-
-			// Sample mutators if enabled
-			bool mutators = false; // default disabled
-			if (mutators) {
-				std::uniform_int_distribution<int> gDist(0, 4);
-				std::uniform_int_distribution<int> bcDist(0, 4);
-				std::uniform_int_distribution<int> bsDist(0, 4);
-				std::uniform_int_distribution<int> bmsDist(0, 4);
-				std::uniform_int_distribution<int> bszDist(0, 4);
-				std::uniform_int_distribution<int> bbDist(0, 4);
-
-				// Write mutator multipliers into arena config
-				if (arena) {
-					// MutatorConfig would be set here in the full implementation
-				}
-			}
+			modeHolder->mode = modes[idx];
 
 			return GameState(arena);
 		}
@@ -163,7 +88,7 @@ namespace RLGSC {
 
 			// Sample whether to use custom spawn
 			std::uniform_real_distribution<float> probDist(0.0f, 1.0f);
-			if (probDist(rng()) > holder->prob) return state; // use native kickoff
+			if (probDist(rng) > holder->prob) return state; // use native kickoff
 
 			// Compute spawn distance
 			float d = minDist + (maxDist - minDist) * (1.0f - holder->ratio);
@@ -171,7 +96,7 @@ namespace RLGSC {
 			// Override player spawns: each car at distance d from ball, facing the ball
 			for (auto& player : state.players) {
 				Vec ballPos = state.ballState.pos;
-				float yaw = atan2(ballPos.y - player.carState.pos.y, ballPos.x - player.carState.pos.x);
+				float yaw = atan2f(ballPos.y - player.carState.pos.y, ballPos.x - player.carState.pos.x);
 
 				// Position car at distance d from ball along kickoff axis
 				player.carState.pos.x = ballPos.x - d * cosf(yaw);
@@ -179,7 +104,7 @@ namespace RLGSC {
 				player.carState.pos.z = RLConst::CAR_SPAWN_REST_Z;
 
 				// Face toward ball
-				player.carState.rotMat = RotMat::fromYaw(yaw);
+				player.carState.rotMat = Angle(yaw, 0, 0).ToRotMat();
 
 				// Initial speed toward ball
 				player.carState.vel.x = -approachSpeed * cosf(yaw);
