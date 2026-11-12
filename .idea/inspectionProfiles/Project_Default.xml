@@ -1,0 +1,48 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="HtmlUnknownAttribute" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="myValues">
+        <value>
+          <list size="3">
+            <item index="0" class="java.lang.String" itemvalue="app.public_use" />
+            <item index="1" class="java.lang.String" itemvalue="or" />
+            <item index="2" class="java.lang.String" itemvalue="tooltip" />
+          </list>
+        </value>
+      </option>
+      <option name="myCustomValuesEnabled" value="true" />
+    </inspection_tool>
+    <inspection_tool class="PyUnresolvedReferencesInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredIdentifiers">
+        <list>
+          <option value="src.webui.enumerate_progress" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="VulnerableLibrariesLocal" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="isIgnoringEnabled" value="true" />
+      <option name="ignoredModules">
+        <list>
+          <option value="Tortoise + RVC" />
+          <option value="Tortoise + RVC" />
+          <option value="Tortoise + RVC" />
+        </list>
+      </option>
+      <option name="ignoredPackages">
+        <list>
+          <option value="null:starlette:0.38.2" />
+          <option value="null:transformers:4.29.2" />
+          <option value="null:gradio:4.22.0" />
+        </list>
+      </option>
+      <option name="ignoredReasons">
+        <list>
+          <option value="idk" />
+          <option value="idk" />
+          <option value="idk" />
+        </list>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>

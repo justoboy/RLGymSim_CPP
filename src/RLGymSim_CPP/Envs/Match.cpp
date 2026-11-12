@@ -9,17 +9,16 @@ namespace RLGSC {
 		obsBuilder->Reset(initialState);
 	}
 
-	FList2 Match::BuildObservations(const GameState& state) {
-		auto result = FList2(state.players.size());
+	std::vector<ObsTuple> Match::BuildObservations(const GameState& state) {
+		std::vector<ObsTuple> results(state.players.size());
 
 		obsBuilder->PreStep(state);
 
-		for (int i = 0; i < state.players.size(); i++) {
-			result[i] =
-				obsBuilder->BuildOBS(state.players[i], state, prevActions[i]);
+		for (int i = 0; i < (int)state.players.size(); i++) {
+			results[i] = obsBuilder->BuildOBS(state.players[i], state, prevActions[i]);
 		}
 
-		return result;
+		return results;
 	}
 
 	FList Match::GetRewards(const GameState& state, bool done) {
@@ -44,7 +43,7 @@ namespace RLGSC {
 	ActionSet Match::ParseActions(const ActionParser::Input& actionsData, const GameState& gameState) {
 		ActionSet actions = actionParser->ParseActions(actionsData, gameState);
 
-		for (int i = 0; i < gameState.players.size(); i++)
+		for (int i = 0; i < (int)gameState.players.size(); i++)
 			if (gameState.players[i].carState.isDemoed)
 				actions[i] = {};
 
@@ -54,7 +53,7 @@ namespace RLGSC {
 	GameState Match::ResetState(Arena* arena) {
 		GameState newState = stateSetter->ResetState(arena);
 
-		if (newState.players.size() != playerAmount) {
+		if ((int)newState.players.size() != playerAmount) {
 			RG_ERR_CLOSE(
 				"Match::ResetState(): New state has a different amount of players, "
 				"expected " << playerAmount << " but got " << newState.players.size() << ".\n"

@@ -37,6 +37,18 @@ namespace RLGSC {
 			IncPlayerCounter<&PlayerData::matchDemos>(bumper, userInfo);
 	}
 
+	FList2 Gym::obsTupleToFList2(const std::vector<ObsTuple>& tuples) {
+		// Flatten obs tuple: for each player, concatenate q, kv, m into a single FList
+		FList2 result(tuples.size());
+		for (int i = 0; i < (int)tuples.size(); i++) {
+			const auto& [q, kv, m] = tuples[i];
+			result[i] = q;
+			result[i].insert(result[i].end(), kv.begin(), kv.end());
+			result[i].insert(result[i].end(), m.begin(), m.end());
+		}
+		return result;
+	}
+
 	Gym::Gym(Match* match, int tickSkip, CarConfig carConfig, GameMode gameMode, MutatorConfig mutatorConfig) :
 		match(match), tickSkip(tickSkip) {
 		arena = Arena::Create(gameMode);
@@ -61,7 +73,8 @@ namespace RLGSC {
 		prevState = resetState;
 		eventTracker.ResetPersistentInfo();
 
-		FList2 obs = match->BuildObservations(resetState);
+		auto obsTuples = match->BuildObservations(resetState);
+		FList2 obs = obsTupleToFList2(obsTuples);
 		return obs;
 	}
 
@@ -73,7 +86,7 @@ namespace RLGSC {
 
 		{ // Step arena with actions
 			auto carItr = arena->_cars.begin();
-			for (int i = 0; i < actions.size(); i++) {
+			for (int i = 0; i < (int)actions.size(); i++) {
 				(*carItr)->controls = (CarControls)actions[i];
 				carItr++;
 			}
@@ -88,7 +101,8 @@ namespace RLGSC {
 			totalSteps++;
 		}
 
-		FList2 obs = match->BuildObservations(state);
+		auto obsTuples = match->BuildObservations(state);
+		FList2 obs = obsTupleToFList2(obsTuples);
 		bool done = match->IsDone(state);
 		FList rewards = match->GetRewards(state, done);
 		prevState = state;
