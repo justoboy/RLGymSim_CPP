@@ -1,6 +1,7 @@
 #pragma once
 #include "PlayerData.h"
 #include "../CommonValues.h"
+#include <array>
 
 namespace RLGSC {
 	struct ScoreLine {
@@ -13,6 +14,17 @@ namespace RLGSC {
 		int& operator[](size_t index) {
 			return teamGoals[index];
 		}
+	};
+
+	// Ball attach info for SPIKE_RUSH / GRIDIRON game modes.
+	// Mirrors RocketSim/src/Sim/Ball/Ball.h:BallState::AttachInfo.
+	struct AttachInfo {
+		uint32_t attachedCarId = 0;       // 0 = free ball, not attached
+		uint32_t lastCarrierId = 0;       // Car that most recently carried (persists after release)
+		Vec localOffset{};                // Ball offset in carrier's local space
+		float engageTimer = 0;            // Seconds ball has been attached to current carrier
+		float releaseCooldown = 0;        // Cooldown after release before re-attach allowed
+		bool active = false;              // True once the mode's attach mechanic is live
 	};
 
 	// https://github.com/AechPro/rocket-league-gym-sim/blob/main/rlgym_sim/utils/gamestates/game_state.py
@@ -39,6 +51,12 @@ namespace RLGSC {
 
 		// Last tick count when updated
 		uint64_t lastTickCount = 0;
+
+		// --- Custom features (SPIKE_RUSH / GRIDIRON) ---
+		AttachInfo attachInfo{};            // Ball attach state for custom modes
+		bool goalScored[2] = { false, false }; // Latch: whether a goal was scored this tick
+		int scoringTeam = -1;               // Team that scored last (-1 = none)
+		uint64_t tickCount = 0;             // Global tick counter
 
 		GameState() = default;
 		explicit GameState(Arena* arena) {

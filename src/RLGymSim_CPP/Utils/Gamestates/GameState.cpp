@@ -55,6 +55,9 @@ void RLGSC::GameState::UpdateFromArena(Arena* arena) {
 	ball = PhysObj(ballState);
 	ballInv = ball.Invert();
 
+	// Copy attach info for custom modes (SPIKE_RUSH / GRIDIRON)
+	attachInfo = ballState.attachInfo;
+
 	players.resize(arena->_cars.size());
 
 	auto carItr = arena->_cars.begin();
@@ -91,10 +94,19 @@ void RLGSC::GameState::UpdateFromArena(Arena* arena) {
 		boostPadTimersInv[i] = stateInv.cooldown;
 	}
 
+	// Reset goal-scored latches at the start of each update
+	goalScored[0] = goalScored[1] = false;
+	scoringTeam = -1;
+
 	// Update goal scoring
 	// If you don't have a GoalScoreCondition then that's not my problem lmao
-	if (Math::IsBallScored(ball.pos))
-		scoreLine[1 - (int)RS_TEAM_FROM_Y(ball.pos.y)]++;
+	if (Math::IsBallScored(ball.pos)) {
+		int team = (int)RS_TEAM_FROM_Y(ball.pos.y);
+		scoreLine[team]++;
+		goalScored[team] = true;
+		scoringTeam = team;
+	}
 
 	lastTickCount = arena->tickCount;
+	tickCount = arena->tickCount;
 }

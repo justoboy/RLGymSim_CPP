@@ -6,8 +6,12 @@
 #include "../Utils/OBSBuilders/OBSBuilder.h"
 #include "../Utils/ActionParsers/ActionParser.h"
 #include "../Utils/StateSetters/StateSetter.h"
+#include <tuple>
 
 namespace RLGSC {
+
+	// Obs tuple type: (q, kv, m) for temporal obs builder
+	using ObsTuple = std::tuple<FList, FList, FList>;
 
 	// https://github.com/AechPro/rocket-league-gym-sim/blob/main/rlgym_sim/envs/match.py
 	class Match {
@@ -46,7 +50,10 @@ namespace RLGSC {
 		}
 
 		void EpisodeReset(const GameState& initialState);
-		FList2 BuildObservations(const GameState& state);
+		
+		// Returns obs tuple (q, kv, m) for each player if using TemporalObsBuilder,
+		// otherwise returns FList2 for legacy obs builders.
+		std::vector<ObsTuple> BuildObservations(const GameState& state);
 		FList GetRewards(const GameState& state, bool done);
 		bool IsDone(const GameState& state);
 		ScoreLine GetScoreLine(const GameState& state);

@@ -28,6 +28,9 @@ namespace RLGSC {
 		};
 		virtual StepResult Step(const ActionParser::Input& actionsData);
 
+		// Helper: convert ObsTuple to FList2 for backward compatibility
+		static FList2 obsTupleToFList2(const std::vector<ObsTuple>& tuples);
+
 		virtual ~Gym() {
 			delete arena;
 		}
