@@ -454,65 +454,30 @@ FList TemporalObsBuilder::buildQuery(const PlayerData& player, const GameState& 
 
 // ============================================================================
 // buildKeyValue: temporal buffer flattened [F][E][kvFeatures] -> [F*E*kvFeatures]
+//
+// The temporal buffer is laid out [F][E][kvFeatures] where E is the fixed per-frame
+// entity count (ball + maxPlayers*2 cars + maxBoostPads, see constructor). The model
+// attends over one token per (frame, entity) pair, so the token count is F*E and the
+// flattened kv tensor is simply the whole buffer.
 // ============================================================================
 
 FList TemporalObsBuilder::buildKeyValue(const GameState& state) {
 	FList kv;
-	int totalSlots = config.nFrames * config.maxBoostPads + (int)state.players.size() + 1; // ball + cars + pads
-	kv.resize(totalSlots * config.kvFeatures, 0.0f);
-
-	// Copy from temporal buffer
-	for (int f = 0; f < config.nFrames; f++) {
-		int entityOffset = 0;
-
-		// Ball at slot 0
-		if (f * totalSlots + 0 < (int)temporalBuf.data.size()) {
-			memcpy(kv.data() + f * totalSlots * config.kvFeatures,
-			       temporalBuf.data.data() + f * temporalBuf.E * config.kvFeatures,
-			       config.kvFeatures * sizeof(float));
-		}
-
-		// Cars at slots 1..nPlayers
-		for (int i = 0; i < (int)state.players.size(); i++) {
-			int slot = 1 + i;
-			if (f * totalSlots + slot < (int)temporalBuf.data.size()) {
-				memcpy(kv.data() + f * totalSlots * config.kvFeatures + slot * config.kvFeatures,
-				       temporalBuf.data.data() + f * temporalBuf.E * config.kvFeatures + slot * config.kvFeatures,
-				       config.kvFeatures * sizeof(float));
-			}
-		}
-
-		// Boost pads at remaining slots
-		for (int p = 0; p < config.maxBoostPads; p++) {
-			int slot = 1 + (int)state.players.size() + p;
-			if (slot < totalSlots && f * totalSlots + slot < (int)temporalBuf.data.size()) {
-				memcpy(kv.data() + f * totalSlots * config.kvFeatures + slot * config.kvFeatures,
-				       temporalBuf.data.data() + f * temporalBuf.E * config.kvFeatures + slot * config.kvFeatures,
-				       config.kvFeatures * sizeof(float));
-			}
-		}
-	}
-
+	kv.reserve(temporalBuf.data.size());
+	kv.insert(kv.end(), temporalBuf.data.begin(), temporalBuf.data.end());
 	return kv;
 }
 
 // ============================================================================
-// buildMask: constant attention mask for zero-padded slots
+// buildMask: one attention-mask value per (frame, entity) token
+//
+// Every slot is a real token in this layout (padded cars/pads simply carry zero
+// features), so the mask is 1.0 (visible) for all F*E tokens.
 // ============================================================================
 
 FList TemporalObsBuilder::buildMask(const GameState& state) {
-	FList m;
-	int totalSlots = config.nFrames * config.maxBoostPads + (int)state.players.size() + 1; // ball + cars + pads
-
-	// All slots are visible (mask = 1.0) for entities that exist
-	// Zero-padded slots get mask = 0.0
-	for (int f = 0; f < config.nFrames; f++) {
-		for (int s = 0; s < totalSlots; s++) {
-			m.push_back(1.0f); // default: visible
-		}
-	}
-
-	return m;
+	int nTokens = temporalBuf.F * temporalBuf.E;
+	return FList(nTokens, 1.0f);
 }
 
 } // namespace RLGSC
