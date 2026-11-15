@@ -48,3 +48,6 @@ CMakeSettings.json
 
 # Anything starting with three underscores
 ___*
+
+# Private design/brainstorming docs (never committed)
+docs_private/
