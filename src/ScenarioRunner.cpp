@@ -1,6 +1,6 @@
 // ScenarioRunner: fixed-seed scenario script that steps the C++ Gym on identical initial states;
 // asserts obs arrays match within float tolerance and goals/demos/terminations match exactly.
-// Mirrors the Python equivalence gate from phase1-sim-port.md task 6.
+// Mirrors the Python equivalence gate.
 
 #include <iostream>
 #include <vector>
@@ -85,7 +85,7 @@ void runScenario(const std::string& name, const std::vector<ScenarioStep>& steps
     std::cout << "\n=== Scenario: " << name << " ===" << std::endl;
 
     // Create match with our components
-    auto obsBuilder = new TemporalObsBuilder(4, 13, 34);
+    auto obsBuilder = new TemporalObsBuilder();
     auto rewardFn = new ComposedReward();
     rewardFn->addTerm("goal", new GoalTerm(), 5.0f);
     rewardFn->addTerm("win_prob", new WinProbTerm(), 1.0f);
@@ -108,6 +108,7 @@ void runScenario(const std::string& name, const std::vector<ScenarioStep>& steps
     // Arena mode is fixed at creation; all steps in a scenario share one mode (steps[0].mode)
     GameMode scenarioMode = steps[0].mode;
     obsBuilder->activeMode = scenarioMode;
+    obsBuilder->tickSkip = 4; // match the gym's tickSkip so the profile EMA weight matches the step rate
 
     // Create gym
     Gym gym(&match, 4, CAR_CONFIG_OCTANE, scenarioMode);

@@ -19,3 +19,13 @@ target_link_libraries(RLGymSim_CPP RocketSim)
 add_executable(ScenarioRunner "src/ScenarioRunner.cpp")
 set_target_properties(ScenarioRunner PROPERTIES CXX_STANDARD 20)
 target_link_libraries(ScenarioRunner RLGymSim_CPP)
+
+# Scratch benchmark harness (pre-authorized scratch space)
+add_executable(scratch "src/scratch.cpp")
+set_target_properties(scratch PROPERTIES CXX_STANDARD 20)
+target_link_libraries(scratch RLGymSim_CPP)
+
+# Fixture gate (pure obs-builder equivalence invariants + golden dumps)
+add_executable(FixtureGate "src/FixtureGate.cpp")
+set_target_properties(FixtureGate PROPERTIES CXX_STANDARD 20)
+target_link_libraries(FixtureGate RLGymSim_CPP)

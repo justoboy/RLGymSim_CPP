@@ -38,6 +38,12 @@ namespace RLGSC {
 			NUM_ACTIONS = 8;
 
 		constexpr int BOOST_LOCATIONS_AMOUNT = 34;
+
+		// Pseudo-match clock constants (mirror reference Scoreboard). ticksLeft uses +inf sentinel
+		// in overtime and -inf when finished; the obs tactical block reads these.
+		constexpr float kTicksPerSecond = 120.0f;
+		constexpr float kMaxTimeSeconds = 300.0f;
+		constexpr float kInf = INFINITY;
 		constexpr Vec BOOST_LOCATIONS[BOOST_LOCATIONS_AMOUNT] = {
 				{0.f, -4240.0, 70.0},
 				{-1792.0, -4184.0, 70.0},

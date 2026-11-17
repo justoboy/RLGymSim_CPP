@@ -100,6 +100,21 @@ void RLGSC::GameState::UpdateFromArena(Arena* arena) {
 		boostPadTimersInv[i] = stateInv.cooldown;
 	}
 
+	// Active pad count (hoops=20 vs soccar-family=34); obs masks pad slots beyond this out.
+	nActivePads = (int)arena->_boostPads.size();
+
+	// Dropshot tile damage grid: flatten [team][tile] raw damage levels (FULL=0/DAMAGED=1/BROKEN=2).
+	// Zeroed for non-dropshot modes so the soccar query tail stays clean.
+	if (arena->gameMode == GameMode::DROPSHOT) {
+		DropshotTilesState tiles = arena->GetDropshotTilesState();
+		for (int team = 0; team < RLConst::Dropshot::TEAM_AMOUNT; team++)
+			for (int t = 0; t < RLConst::Dropshot::NUM_TILES_PER_TEAM; t++)
+				tileStates[team * RLConst::Dropshot::NUM_TILES_PER_TEAM + t] =
+					(float)tiles.states[team][t].damageState;
+	} else {
+		tileStates.fill(0.0f);
+	}
+
 	// Reset goal-scored latches at the start of each update
 	goalScored[0] = goalScored[1] = false;
 	scoringTeam = -1;
@@ -111,6 +126,27 @@ void RLGSC::GameState::UpdateFromArena(Arena* arena) {
 		scoreLine[team]++;
 		goalScored[team] = true;
 		scoringTeam = team;
+	}
+
+	// --- Pseudo-match clock (mirrors reference Scoreboard SharedInfoProvider) ---
+	// First update (lastTickCount == 0): initialize the clock to full regulation time. Subsequent
+	// updates count it down by the elapsed ticks; on expiry a tie -> overtime (+inf sentinel) and a
+	// non-tie -> finished (-inf sentinel). A goal while overtime ends the game (finished).
+	if (lastTickCount == 0) {
+		ticksLeft = CommonValues::kMaxTimeSeconds * CommonValues::kTicksPerSecond;
+		isOvertime = false;
+		finished = false;
+	} else {
+		if (!isOvertime && !finished) {
+			ticksLeft -= (float)tickSkip;
+			if (ticksLeft <= 0.0f) {
+				if (scoreLine[0] == scoreLine[1]) { ticksLeft = CommonValues::kInf; isOvertime = true; }
+				else { ticksLeft = -CommonValues::kInf; finished = true; }
+			}
+		}
+		if (goalScored[0] || goalScored[1]) {
+			if (isOvertime && scoreLine[0] != scoreLine[1]) { ticksLeft = -CommonValues::kInf; finished = true; }
+		}
 	}
 
 	lastTickCount = arena->tickCount;

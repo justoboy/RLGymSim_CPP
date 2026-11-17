@@ -66,37 +66,37 @@ namespace RLGSC {
 
 	Gym::StepResult Gym::Step(const ActionParser::Input& actionsData) {
 		ActionSet actions = match->ParseActions(actionsData, prevState);
-		match->prevActions = actions;
-
-		GameState state;
+		match->prevActions = std::move(actions);
 
 		{ // Step arena with actions
 			auto carItr = arena->_cars.begin();
-			for (int i = 0; i < (int)actions.size(); i++) {
-				(*carItr)->controls = (CarControls)actions[i];
+			const auto& actionsRef = match->prevActions;
+			for (int i = 0; i < (int)actionsRef.size(); i++) {
+				(*carItr)->controls = (CarControls)actionsRef[i];
 				carItr++;
 			}
 
 			arena->Step(1);
 			if (arena->gameMode != GameMode::HEATSEEKER)
-				eventTracker.Update(arena);
-			state = prevState; // All callbacks have been hit
-			state.UpdateFromArena(arena);
+				eventTracker.Update(arena); // callbacks mutate prevState.players counters
+			// Update prevState IN PLACE: players.resize() is a no-op at equal size and
+			// UpdateFromCar overwrites every physics field while preserving the counters,
+			// so in-place update is value-identical to the old copy-then-update path.
+			prevState.UpdateFromArena(arena);
 			arena->Step(tickSkip - 1);
 			totalTicks += tickSkip;
 			totalSteps++;
 		}
 
-		FList2 obs = match->BuildObservations(state);
-		bool done = match->IsDone(state);
-		FList rewards = match->GetRewards(state, done);
-		prevState = state;
+		FList2 obs = match->BuildObservations(prevState);
+		bool done = match->IsDone(prevState);
+		FList rewards = match->GetRewards(prevState, done);
 
 		return StepResult {
-			obs,
-			rewards,
+			std::move(obs),
+			std::move(rewards),
 			done,
-			state
+			prevState // one copy for the caller (prevState stays canonical for next step)
 		};
 	}
 }

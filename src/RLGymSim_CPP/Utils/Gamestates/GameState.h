@@ -58,6 +58,22 @@ namespace RLGSC {
 		int scoringTeam = -1;               // Team that scored last (-1 = none)
 		uint64_t tickCount = 0;             // Global tick counter
 
+		// Match clock (read by the obs tactical block). ticksLeft counts down in ticks;
+		// isOvertime is true once regulation expires with a tied score. finished is true once the
+		// game is over (regulation expired with a non-tie, or an overtime goal was scored).
+		// Mirrors reference Scoreboard: ticksLeft is +inf in overtime, -inf when finished.
+		float ticksLeft = 0;
+		bool isOvertime = false;
+		bool finished = false;
+
+		// Dropshot tile damage grid (raw damage levels FULL=0/DAMAGED=1/BROKEN=2), flattened
+		// [team][tile] = 2*70 = 140 cells. Zeroed for non-dropshot modes.
+		std::array<float, 140> tileStates{};
+
+		// Number of boost pads the active arena actually has (hoops=20 vs soccar-family=34). The
+		// obs builder masks pad slots beyond this count out of attention.
+		int nActivePads = CommonValues::BOOST_LOCATIONS_AMOUNT;
+
 		GameState() = default;
 		explicit GameState(Arena* arena) {
 			UpdateFromArena(arena);
