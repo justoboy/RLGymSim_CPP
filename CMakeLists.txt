@@ -34,3 +34,8 @@ target_link_libraries(FixtureGate RLGymSim_CPP)
 add_executable(ParityGate "src/ParityGate.cpp")
 set_target_properties(ParityGate PROPERTIES CXX_STANDARD 20)
 target_link_libraries(ParityGate RLGymSim_CPP)
+
+# Env-throughput benchmark (C++ half of the Python-vs-C++ env speed test; reads the dumped action stream)
+add_executable(EnvThroughput "src/EnvThroughput.cpp")
+set_target_properties(EnvThroughput PROPERTIES CXX_STANDARD 20)
+target_link_libraries(EnvThroughput RLGymSim_CPP)
