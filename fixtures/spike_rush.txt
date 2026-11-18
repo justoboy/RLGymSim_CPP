@@ -1,0 +1,32 @@
+# spike_rush fixture: 1v1. Exercises the SPIKE_RUSH mode token (5) + ball_type tag (1), the
+# pre-activation window (ball free), engage (ball welded to blue carrier), and a steal-with-demo.
+MODE 5
+TICK_SKIP 8
+N_ACTIVE_PADS 34
+BLUE_SCORE 0
+ORANGE_SCORE 0
+TICKS_LEFT 36000
+IS_OVERTIME 0
+FINISHED 0
+MUT 1 1 1 1 1 1
+HS 0 0 0
+CHARGE 0
+PAD_TIMERS 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+
+# frame 0: pre-activation, free ball at center
+FRAME
+BALL 0 0 93.15 0 0 0 0 0 0
+CAR 0 -2048 -4096 17.5 0 0 0 0 0 0 1 0 0 0 0 1 34 0 1 0 0 0 0
+CAR 1 2048 4096 17.5 0 0 0 0 0 0 -1 0 0 0 0 1 34 0 1 0 0 0 0
+
+# frame 1: blue engages (ball welded to blue carrier, ball rides the car)
+FRAME
+BALL -1500 -3000 90 800 200 0 0 0 0
+CAR 0 -1500 -3000 17.5 800 200 0 0.9 0.1 0 0 0 1 0 0 1 55 0 1 0 0 1 0
+CAR 1 2048 4096 17.5 0 0 0 0 0 0 -1 0 0 0 0 1 34 0 1 0 0 0 0
+
+# frame 2: orange steals (ball now welded to orange, blue gets demoed -> demo rising edge)
+FRAME
+BALL 1800 3800 90 -500 -300 0 0 0 0
+CAR 0 -1500 -3000 17.5 0 0 0 0 0 0 1 0 0 0 0 1 0 1 0 0 0 0 0
+CAR 1 1800 3800 17.5 -500 -300 0 -0.9 0.1 0 0 0 1 0 0 1 55 0 1 0 0 1 0

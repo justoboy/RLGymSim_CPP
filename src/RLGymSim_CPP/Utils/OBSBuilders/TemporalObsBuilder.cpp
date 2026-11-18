@@ -414,11 +414,37 @@ FList TemporalObsBuilder::BuildOBS(
 		}
 	}
 
-	// Pads: one token each, latest frame only (buffer slots N_BC..N_BC+P-1).
+	// Pads: one token each, latest frame only (buffer slots N_BC..N_BC+P-1). The pad's 5 vector
+	// blocks get the SAME self-relative rotation as ball/cars (the pos block is made self-relative,
+	// the fw/up/angVel blocks are zero for a static pad so they rotate to zero); Python's
+	// _relative_core rotates every entity in the buffer, pads included, so the 30-col relative block
+	// must be filled here too (not left zero).
 	for (int p = 0; p < ObsLayout::MAX_BOOST_PADS; p++) {
 		const float* src = buf.data() + (size_t)(N_FRAMES - 1) * N_ENTITIES * EF + (size_t)(N_BC + p) * EF;
 		float* dst = kv.data() + ((size_t)N_FRAMES * N_BC + p) * ObsLayout::KV_FEATURES;
+		float xs[5], ys[5], zs[5];
+		for (int k = 0; k < 5; k++) {
+			int cc = ObsLayout::POS + 3 * k;
+			float v0 = src[cc], v1 = src[cc + 1], v2 = src[cc + 2];
+			if (k == 0) { v0 -= px; v1 -= py; v2 -= pz; }
+			xs[k] = v0; ys[k] = v1; zs[k] = v2;
+		}
 		for (int c = 0; c < EF; c++) dst[c] = src[c];
+		const int rel0 = EF;
+		for (int k = 0; k < 5; k++) {
+			float v0 = xs[k], v1 = ys[k], v2 = zs[k];
+			float frx = cy * v0 - sy * v1;
+			float fry = sy * v0 + cy * v1;
+			float crx = cp * cy * v0 + (sr * sp * cy - cr * sy) * v1 - (cr * sp * cy + sr * sy) * v2;
+			float cry = cp * sy * v0 + (sr * sp * sy + cr * cy) * v1 - (cr * sp * sy - sr * cy) * v2;
+			float crz = sp * v0 - cp * sr * v1 + cp * cr * v2;
+			dst[rel0 + k] = sanitize(frx);
+			dst[rel0 + 5 + k] = sanitize(fry);
+			dst[rel0 + 10 + k] = sanitize(v2);
+			dst[rel0 + 15 + k] = sanitize(crx);
+			dst[rel0 + 20 + k] = sanitize(cry);
+			dst[rel0 + 25 + k] = sanitize(crz);
+		}
 	}
 
 	// --- Query assembly ---

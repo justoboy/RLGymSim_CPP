@@ -29,3 +29,8 @@ target_link_libraries(scratch RLGymSim_CPP)
 add_executable(FixtureGate "src/FixtureGate.cpp")
 set_target_properties(FixtureGate PROPERTIES CXX_STANDARD 20)
 target_link_libraries(FixtureGate RLGymSim_CPP)
+
+# Parity gate (cross-language obs equivalence: parse fixture -> C++ builder -> dump obs)
+add_executable(ParityGate "src/ParityGate.cpp")
+set_target_properties(ParityGate PROPERTIES CXX_STANDARD 20)
+target_link_libraries(ParityGate RLGymSim_CPP)

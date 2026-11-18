@@ -49,5 +49,9 @@ CMakeSettings.json
 # Anything starting with three underscores
 ___*
 
+# Python bytecode
+__pycache__/
+*.pyc
+
 # Private design/brainstorming docs (never committed)
 docs_private/

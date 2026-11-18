@@ -1,0 +1,32 @@
+# soccar fixture: 1v1 kickoff, then a blue touch (air), then an orange demo. Exercises real ball
+# spin, touch-conditioned profile columns, demo rising-edge, and team inversion (orange agent).
+MODE 0
+TICK_SKIP 8
+N_ACTIVE_PADS 34
+BLUE_SCORE 0
+ORANGE_SCORE 0
+TICKS_LEFT 36000
+IS_OVERTIME 0
+FINISHED 0
+MUT 1 1 1 1 1 1
+HS 0 0 0
+CHARGE 0
+PAD_TIMERS 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+
+# frame 0: kickoff, both cars neutral, ball at center with a small real spin
+FRAME
+BALL 0 0 93.15 0 0 0 0.3 -0.2 0.1
+CAR 0 -2048 -4096 17.5 0 0 0 0 0 0 1 0 0 0 0 1 34 0 1 0 0 0 0
+CAR 1 2048 4096 17.5 0 0 0 0 0 0 -1 0 0 0 0 1 34 0 1 0 0 0 0
+
+# frame 1: blue touches the ball high (air touch), ball picks up speed + spin
+FRAME
+BALL 120 200 420 600 300 50 1.2 0.4 -0.6
+CAR 0 -1500 -3000 17.5 800 200 0 0.9 0.1 0 0 0 1 0 0 1 55 0 1 0 0 1 0
+CAR 1 2048 4096 17.5 0 0 0 0 0 0 -1 0 0 0 0 1 34 0 1 0 0 0 0
+
+# frame 2: orange gets demoed (rising edge), blue keeps possession (possession_gain)
+FRAME
+BALL 400 1200 300 700 400 20 0.9 0.2 -0.3
+CAR 0 -900 -1500 17.5 900 300 0 0.95 0.05 0 0 0 1 0 0 1 70 0 1 0 0 1 0
+CAR 1 1800 3800 17.5 0 0 0 0 0 0 -1 0 0 0 0 1 0 1 0 0 0 0 0
