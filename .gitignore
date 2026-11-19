@@ -55,3 +55,7 @@ __pycache__/
 
 # Private design/brainstorming docs (never committed)
 docs_private/
+
+# Local agent rules/instructions (read from disk, never committed/pushed)
+.kilocode/
+.kilo/
