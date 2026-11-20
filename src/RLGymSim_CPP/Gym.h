@@ -4,12 +4,20 @@
 namespace RLGSC {
 	class Gym {
 	public:
-		Arena* arena;
-		GameEventTracker eventTracker;
+		// The active Arena. A FRESH Arena is built on every Reset() (mirroring the reference engine, which
+		// hands each episode's mutator an empty car set and builds a brand-new Arena per episode). We never
+		// mutate a live bullet world's car set at runtime; that path corrupted memory. Arena collision meshes
+		// are globally cached, so rebuilding per episode is bounded.
+		Arena* arena = nullptr;
+		GameEventTracker eventTracker; // persistent across arena rebuilds; shot/goal/save callbacks live here
 		Match* match;
 		int tickSkip;
 		GameState prevState;
-		std::vector<uint32_t> carIds;
+
+		// Stored so Reset() can rebuild the Arena with the same configuration each episode.
+		CarConfig carConfig;
+		GameMode gameMode;
+		MutatorConfig mutatorConfig;
 
 		int totalTicks = 0;
 		int totalSteps = 0;

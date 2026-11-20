@@ -38,30 +38,36 @@ namespace RLGSC {
 	}
 
 	Gym::Gym(Match* match, int tickSkip, CarConfig carConfig, GameMode gameMode, MutatorConfig mutatorConfig) :
-		match(match), tickSkip(tickSkip) {
-		arena = Arena::Create(gameMode);
-		arena->SetMutatorConfig(mutatorConfig);
-
-		for (int i = 0; i < match->teamSize; i++) {
-			arena->AddCar(Team::BLUE, carConfig);
-			if (match->spawnOpponents)
-				arena->AddCar(Team::ORANGE, carConfig);
-		}
-
+		match(match), tickSkip(tickSkip), carConfig(carConfig), gameMode(gameMode), mutatorConfig(mutatorConfig) {
+		// NO Arena is created in the constructor. A FRESH Arena is built on every Reset() (see Reset below),
+		// mirroring the reference engine, which hands each episode's mutator an EMPTY car set and builds a
+		// brand-new Arena per episode. We deliberately never mutate a live bullet world's car set at runtime:
+		// RemoveCar()/AddCar() on a running world corrupts this fork's Bullet state (the removed rigid body can
+		// still be referenced by the broadphase/pair cache). Whole-object create/destroy is safe. Arena collision
+		// meshes are globally cached, so rebuilding per episode is bounded. The bump callback is arena-bound, so
+		// it is (re-)registered on each fresh arena; shot/goal/save callbacks live on the persistent eventTracker.
 		eventTracker.SetShotCallback(_ShotEventCallback, this);
 		eventTracker.SetGoalCallback(_GoalEventCallback, this);
 		eventTracker.SetSaveCallback(_SaveEventCallback, this);
-
-		arena->SetCarBumpCallback(_BumpCallback, this);
 	}
 
 	FList2 Gym::Reset() {
+		// Build a brand-new, EMPTY Arena for this episode (the StateSetter then spawns this episode's active set
+		// into it, so the active car count can vary per episode: 1v1..4v4 even + uneven lobbies). Destroy the
+		// previous episode's arena first.
+		if (arena)
+			delete arena;
+		arena = Arena::Create(gameMode);
+		arena->SetMutatorConfig(mutatorConfig);
+		arena->SetCarBumpCallback(_BumpCallback, this);
+
 		GameState resetState = match->ResetState(arena);
 		match->EpisodeReset(resetState);
 		prevState = resetState;
 		eventTracker.ResetPersistentInfo();
 
-		return match->BuildObservations(resetState);
+		FList2 obs = match->BuildObservations(resetState);
+		return obs;
 	}
 
 	Gym::StepResult Gym::Step(const ActionParser::Input& actionsData) {
@@ -69,11 +75,15 @@ namespace RLGSC {
 		match->prevActions = std::move(actions);
 
 		{ // Step arena with actions
-			auto carItr = arena->_cars.begin();
+			// Bind each action to its car by STABLE car id (prevState.players[i].carId), not by
+			// arena->_cars iteration order. The active set can change per reset, so the unordered_set
+			// order is not a reliable slot<->action mapping; id lookup is. prevState.players is already
+			// in deterministic slot order (blue-first by id), so index i here == slot i everywhere else.
 			const auto& actionsRef = match->prevActions;
 			for (int i = 0; i < (int)actionsRef.size(); i++) {
-				(*carItr)->controls = (CarControls)actionsRef[i];
-				carItr++;
+				Car* car = arena->GetCar(prevState.players[i].carId);
+				if (car)
+					car->controls = (CarControls)actionsRef[i];
 			}
 
 			arena->Step(1);

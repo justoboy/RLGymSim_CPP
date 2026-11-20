@@ -20,12 +20,14 @@
 
 using namespace RLGSC;
 
-// Deterministic state setter: fixed-seed kickoff, no RNG elsewhere.
+// Deterministic state setter: spawns the single blue car into the fresh empty arena, then a fixed-seed
+// kickoff. No RNG elsewhere. (The Gym constructor no longer spawns cars; the setter owns the active set.)
 class FixedKickoffMutator : public StateSetter {
 public:
 	int seed;
 	explicit FixedKickoffMutator(int seed) : seed(seed) {}
 	virtual GameState ResetState(Arena* arena) override {
+		arena->AddCar(Team::BLUE, CAR_CONFIG_OCTANE); // single self-play car (spawnOpponents=false)
 		arena->ResetToRandomKickoff(seed);
 		return GameState(arena);
 	}

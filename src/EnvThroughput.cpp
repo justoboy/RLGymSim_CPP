@@ -106,9 +106,9 @@ static Result runBench(const Stream& s, int tickSkip, int warmup) {
 	};
 	auto actionParser = new ContinuousActionParser(tickSkip);
 
-	TeamConfigHolder configHolder(1, 1);
-	ModeHolder modeHolder;
-	auto stateSetter = new TeamConfigMutator(&configHolder);
+	// Single fixed (1,1) matchup, single member (self-play): the active-set spawner degenerates to the
+	// old fixed-topology path (every slot owned by member 0).
+	auto stateSetter = new TeamConfigMutator(std::vector<std::pair<int, int>>{ {1, 1} }, std::vector<float>{ 1.0f }, 1, 0.0f, 0u);
 
 	Match match(rewardFn, terminalConds, obsBuilder, actionParser, stateSetter, 1, true);
 	Gym gym(&match, tickSkip, CAR_CONFIG_OCTANE, GameMode::SOCCAR);

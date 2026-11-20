@@ -6,7 +6,16 @@ Vec RandNormVec() {
 }
 
 RLGSC::GameState RLGSC::RandomState::ResetState(Arena* arena) {
-	
+	// The Arena is built FRESH and EMPTY on every Reset() (see Gym::Reset), so there is nothing to clear here —
+	// we only ADD this episode's active set: teamSize blue cars, plus teamSize orange opponents when enabled.
+	// Blue-first spawn order keeps the deterministic (team,id) sort in GameState::UpdateFromArena producing
+	// blue-first slot order. We never RemoveCar on a live world (that corrupts this fork's Bullet state).
+	for (int i = 0; i < teamSize; i++)
+		arena->AddCar(Team::BLUE, carConfig);
+	if (spawnOpponents)
+		for (int i = 0; i < teamSize; i++)
+			arena->AddCar(Team::ORANGE, carConfig);
+
 	// Reset boost pads and everything
 	arena->ResetToRandomKickoff();
 

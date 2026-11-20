@@ -51,16 +51,11 @@ namespace RLGSC {
 	}
 
 	GameState Match::ResetState(Arena* arena) {
+		// The active-set setter spawns a per-episode number of cars (variable team size + uneven lobbies),
+		// so the player count legitimately changes between resets. The old fixed-topology guard that
+		// hard-errored on a player-count change is removed; everything downstream (obs build, rewards,
+		// action parse, learner routing) iterates state.players.size() at runtime.
 		GameState newState = stateSetter->ResetState(arena);
-
-		if ((int)newState.players.size() != playerAmount) {
-			RG_ERR_CLOSE(
-				"Match::ResetState(): New state has a different amount of players, "
-				"expected " << playerAmount << " but got " << newState.players.size() << ".\n"
-				"Changing number of players at state reset is currently not supported.\n" <<
-				"If you want variable player amounts, set a differing player amount per env."
-			);
-		}
 
 		for (auto& pad : arena->_boostPads)
 			pad->SetState({});

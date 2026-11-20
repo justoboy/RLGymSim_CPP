@@ -1,5 +1,7 @@
 #include "GameState.h"
 
+#include <algorithm>
+
 #include "../../Math.h"
 
 using namespace RLGSC;
@@ -64,16 +66,25 @@ void RLGSC::GameState::UpdateFromArena(Arena* arena) {
 	attachInfo.releaseCooldown = ballState.attachInfo.releaseCooldown;
 	attachInfo.active        = ballState.attachInfo.active;
 
-	players.resize(arena->_cars.size());
+	// Build players in a DETERMINISTIC slot order (blue-first, then by ascending car id) so that
+	// slot index i always maps to the same logical agent across episodes. arena->_cars is an
+	// unordered_set, so iterating it directly would scramble the slot<->agent binding that the obs
+	// builder and the learner's per-slot routing depend on. The active-set setter spawns blue cars
+	// before orange ones, so a (team, id) sort reproduces the reference's blue-then-orange slot order.
+	std::vector<Car*> orderedCars(arena->_cars.begin(), arena->_cars.end());
+	std::sort(orderedCars.begin(), orderedCars.end(), [](const Car* a, const Car* b) {
+		int ta = (int)a->team, tb = (int)b->team;
+		if (ta != tb) return ta < tb;       // BLUE(0) before ORANGE(1)
+		return a->id < b->id;               // then by stable id
+	});
 
-	auto carItr = arena->_cars.begin();
-	for (int i = 0; i < players.size(); i++) {
+	players.resize(orderedCars.size());
+
+	for (int i = 0; i < (int)players.size(); i++) {
 		auto& player = players[i];
-		player.UpdateFromCar(*carItr, arena->tickCount, tickSkip);
+		player.UpdateFromCar(orderedCars[i], arena->tickCount, tickSkip);
 		if (player.ballTouchedStep)
 			lastTouchCarID = player.carId;
-
-		carItr++;
 	}
 
 	if (!boostPadIndexMapBuilt) {

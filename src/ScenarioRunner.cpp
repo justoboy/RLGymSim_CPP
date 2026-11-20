@@ -99,9 +99,9 @@ void runScenario(const std::string& name, const std::vector<ScenarioStep>& steps
 
     auto actionParser = new ContinuousActionParser(8);
 
-    TeamConfigHolder configHolder(teamSize, teamSize);
-    ModeHolder modeHolder;
-    auto stateSetter = new TeamConfigMutator(&configHolder);
+    // Single fixed (teamSize,teamSize) matchup, single member (self-play): the active-set spawner
+    // degenerates to the old fixed-topology path (every slot owned by member 0).
+    auto stateSetter = new TeamConfigMutator(std::vector<std::pair<int, int>>{ {teamSize, teamSize} }, std::vector<float>{ 1.0f }, 1, 0.0f, 0u);
 
     Match match(rewardFn, terminalConds, obsBuilder, actionParser, stateSetter, teamSize, true);
 

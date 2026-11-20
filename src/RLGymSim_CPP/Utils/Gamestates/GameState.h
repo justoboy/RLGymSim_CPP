@@ -35,6 +35,12 @@ namespace RLGSC {
 		int lastTouchCarID = -1;
 		std::vector<PlayerData> players;
 
+		// Per-active-slot owner id (which league member/bot controls each currently-active slot), in the
+		// SAME blue-first order as `players`. Written by the active-set StateSetter on each reset and read
+		// by the learner to route each slot's trajectory to its owning member. For a single-bot self-play
+		// run this is all zeros; for a sibling league it's the per-episode shuffled member ids.
+		std::vector<int> slotOwners;
+
 		BallState ballState;
 		PhysObj ball, ballInv;
 

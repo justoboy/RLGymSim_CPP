@@ -20,19 +20,71 @@ namespace RLGSC {
 		GameMode mode = GameMode::SOCCAR;
 	};
 
-	// TeamConfigMutator: resets to a random kickoff and captures the resulting state.
-	// (Cars are already spawned into the arena by the Gym constructor based on teamSize,
-	//  so this setter only handles the kickoff reset itself.)
+	// TeamConfigMutator: per-episode active-set spawner + matchup sampler.
+	//
+	// Faithful port of the reference TeamConfigMutator + sample_team_config + League.draw_sibling/
+	// self_matchup. On every reset it: (1) samples one (n_blue, n_orange) from the weighted pool,
+	// (2) clears every car currently in the arena, (3) spawns exactly n_blue blue + n_orange orange
+	// cars, (4) runs the native random kickoff to reposition them + the ball, and (5) stamps the
+	// per-episode owner map (which league member controls each active slot, in blue-first order) into
+	// GameState::slotOwners for the learner to route each slot's trajectory to its owning member.
+	//
+	// A single-bot self-play run is the degenerate case: one member, siblingFraction 0, every config
+	// (1,1) -> every slot owned by member 0, byte-identical to the old fixed-topology path.
 	class TeamConfigMutator : public StateSetter {
 	public:
-		TeamConfigHolder* holder;
+		// Weighted pool of (n_blue, n_orange) team configs (mirrors DEFAULT_TEAM_CONFIGS/WEIGHTS).
+		std::vector<std::pair<int, int>> teamConfigs;
+		std::vector<float> teamWeights;
+		// Number of league members (bots). 1 => pure self-play (every slot owned by member 0).
+		int memberCount = 1;
+		// Fraction of episodes that draw a mixed-lineage (sibling) matchup vs. all-slots-one-bot self.
+		float siblingFraction = 0.0f;
+		std::mt19937 rng;
 
-		TeamConfigMutator(TeamConfigHolder* holder) : holder(holder) {}
+		TeamConfigMutator(const std::vector<std::pair<int, int>>& configs,
+		                  const std::vector<float>& weights,
+		                  int memberCount, float siblingFraction, uint32_t seed)
+			: teamConfigs(configs), teamWeights(weights),
+			  memberCount(memberCount), siblingFraction(siblingFraction), rng(seed) {
+			assert(teamConfigs.size() == teamWeights.size());
+			assert(memberCount >= 1);
+		}
 
 		virtual GameState ResetState(Arena* arena) override {
-			(void)holder; // team sizes are fixed at Gym construction (Match::playerAmount check)
+			// 1. Sample one (n_blue, n_orange) from the weighted pool.
+			std::discrete_distribution<int> cfgDist(teamWeights.begin(), teamWeights.end());
+			auto [nBlue, nOrange] = teamConfigs[cfgDist(rng)];
+			int n = nBlue + nOrange;
+
+			// 2. Build the per-slot owner list (blue-first slot order: first nBlue slots blue, rest orange).
+			//    Self-play: every slot -> member 0. Sibling: cycle member ids across the n slots then shuffle
+			//    so each bot lands on each team over time (mirrors League.draw_sibling).
+			std::vector<int> botIds(n, 0);
+			bool sibling = memberCount > 1
+				&& std::uniform_real_distribution<float>(0.0f, 1.0f)(rng) < siblingFraction;
+			if (sibling) {
+				for (int j = 0; j < n; j++)
+					botIds[j] = j % memberCount;   // cycle member ids as evenly as possible
+				std::shuffle(botIds.begin(), botIds.end(), rng);
+			} // else: self-play, botIds stays all-zero.
+
+			// 3. The Arena is built FRESH and EMPTY on every Reset() (see Gym::Reset), so we only ADD this
+			//    episode's active set: blue cars first (ascending id), then orange (ascending id), so the
+			//    deterministic (team,id) sort in GameState::UpdateFromArena reproduces blue-first slot order.
+			//    We never RemoveCar on a live world (that corrupts this fork's Bullet state).
+			for (int i = 0; i < nBlue; i++)
+				arena->AddCar(Team::BLUE, CAR_CONFIG_OCTANE);
+			for (int i = 0; i < nOrange; i++)
+				arena->AddCar(Team::ORANGE, CAR_CONFIG_OCTANE);
+
+			// 4. Native random kickoff repositions the now-existing cars + ball.
 			arena->ResetToRandomKickoff();
-			return GameState(arena);
+
+			// 5. Capture the state and stamp the per-episode owner map (already in blue-first slot order).
+			GameState state(arena);
+			state.slotOwners = botIds;
+			return state;
 		}
 	};
 
