@@ -42,11 +42,18 @@ int main(int argc, char** argv) {
 	auto obsBuilder = new TemporalObsBuilder();
 	obsBuilder->activeMode = GameMode::SOCCAR;
 
-	auto rewardFn = new ComposedReward();
-	rewardFn->addTerm("goal", new GoalTerm(), 5.0f);
-	rewardFn->addTerm("win_prob", new WinProbTerm(), 1.0f);
-	rewardFn->addTerm("proximity", new ProximityTerm(), 0.5f);
-	rewardFn->addTerm("alignment", new AlignmentTerm(), 0.3f);
+	// Single-member ComposedReward (self-play): one member selects these 4 terms with the given weights,
+	// no team blending (plain weighted sum, matching the old addTerm path).
+	std::vector<RewardTerm*> terms;
+	terms.push_back(new GoalTerm());
+	terms.push_back(new WinProbTerm());
+	terms.push_back(new ProximityTerm());
+	terms.push_back(new AlignmentTerm());
+	MemberRewardSpec spec;
+	spec.termWeights = { {"goal", 5.0f}, {"win_prob", 1.0f}, {"proximity", 0.5f}, {"alignment", 0.3f} };
+	spec.teamSpirit = 0.0f;
+	spec.opponentPunish = 0.0f;
+	auto rewardFn = new ComposedReward(std::move(terms), std::vector<MemberRewardSpec>{ std::move(spec) });
 
 	auto terminalConds = std::vector<TerminalCondition*>{
 		new ScoreboardGoalCondition(1000000) // effectively never; keep episode alive

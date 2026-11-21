@@ -2,8 +2,9 @@
 #include "StateSetter.h"
 #include <random>
 
-// State setters ported from reference/reference/mode_setters.py:
-// TeamConfigMutator, ModeSamplerMutator, SpawnCurriculumMutator.
+// State setters ported from the reference mode_setters.py:
+// TeamConfigMutator (active-set spawner + matchup sampler + optional spawn-curriculum override),
+// ModeSamplerMutator (per-episode mode sampler).
 // NOTE: uses RocketSim::GameMode (via Framework.h's `using namespace RocketSim`).
 
 namespace RLGSC {
@@ -20,17 +21,35 @@ namespace RLGSC {
 		GameMode mode = GameMode::SOCCAR;
 	};
 
-	// TeamConfigMutator: per-episode active-set spawner + matchup sampler.
+	// Mutable holder for the spawn-curriculum config (read by TeamConfigMutator on every reset).
+	//   enabled: when false the spawn override is a no-op (every episode uses the native kickoff).
+	//   ratio:   scaffold blend 1->0. d = MIN + (MAX-MIN)*(1-ratio).
+	//   prob:    fraction of episodes that use the custom (easy) spawn; the rest stay native kickoff.
+	struct SpawnHolder {
+		bool enabled = false;
+		float ratio = 1.0f; // scaffold blend 1->0
+		float prob = 0.5f;  // fraction of episodes using custom spawn
+	};
+
+	// Custom-spawn geometry (mirrors the reference scaffold constants).
+	inline constexpr float SPAWN_MIN_DIST = 400.0f;     // ball basically on the car (ratio=1)
+	inline constexpr float SPAWN_MAX_DIST = 4000.0f;    // real kickoff gap (ratio=0)
+	inline constexpr float SPAWN_APPROACH_SPEED = 1000.0f; // initial car speed (uu/s) aimed at the ball
+
+	// TeamConfigMutator: per-episode active-set spawner + matchup sampler (+ optional spawn curriculum).
 	//
 	// Faithful port of the reference TeamConfigMutator + sample_team_config + League.draw_sibling/
-	// self_matchup. On every reset it: (1) samples one (n_blue, n_orange) from the weighted pool,
-	// (2) clears every car currently in the arena, (3) spawns exactly n_blue blue + n_orange orange
-	// cars, (4) runs the native random kickoff to reposition them + the ball, and (5) stamps the
-	// per-episode owner map (which league member controls each active slot, in blue-first order) into
+	// self_matchup (and the SpawnCurriculumMutator override that runs after it). On every reset it:
+	// (1) samples one (n_blue, n_orange) from the weighted pool, (2) spawns exactly n_blue blue +
+	// n_orange orange cars into the fresh empty arena (blue-first by id), (3) runs the native random
+	// kickoff to reposition them + the ball, (4) on a fraction of episodes overrides the live ball +
+	// car states with a custom (easy) spawn, and (5) stamps the per-episode owner map into
 	// GameState::slotOwners for the learner to route each slot's trajectory to its owning member.
 	//
-	// A single-bot self-play run is the degenerate case: one member, siblingFraction 0, every config
-	// (1,1) -> every slot owned by member 0, byte-identical to the old fixed-topology path.
+	// The spawn override writes to the LIVE arena (ball->SetState / car->SetState), mirroring
+	// RandomState, so the engine actually simulates the custom spawn (the old snapshot-only override
+	// never reached the engine). A single-bot self-play run is the degenerate case: one member,
+	// siblingFraction 0, every config (1,1) -> every slot owned by member 0.
 	class TeamConfigMutator : public StateSetter {
 	public:
 		// Weighted pool of (n_blue, n_orange) team configs (mirrors DEFAULT_TEAM_CONFIGS/WEIGHTS).
@@ -40,13 +59,16 @@ namespace RLGSC {
 		int memberCount = 1;
 		// Fraction of episodes that draw a mixed-lineage (sibling) matchup vs. all-slots-one-bot self.
 		float siblingFraction = 0.0f;
+		// Optional spawn-curriculum holder (nullptr => always native kickoff).
+		SpawnHolder* spawn = nullptr;
 		std::mt19937 rng;
 
 		TeamConfigMutator(const std::vector<std::pair<int, int>>& configs,
 		                  const std::vector<float>& weights,
-		                  int memberCount, float siblingFraction, uint32_t seed)
+		                  int memberCount, float siblingFraction, uint32_t seed,
+		                  SpawnHolder* spawn = nullptr)
 			: teamConfigs(configs), teamWeights(weights),
-			  memberCount(memberCount), siblingFraction(siblingFraction), rng(seed) {
+			  memberCount(memberCount), siblingFraction(siblingFraction), spawn(spawn), rng(seed) {
 			assert(teamConfigs.size() == teamWeights.size());
 			assert(memberCount >= 1);
 		}
@@ -81,7 +103,39 @@ namespace RLGSC {
 			// 4. Native random kickoff repositions the now-existing cars + ball.
 			arena->ResetToRandomKickoff();
 
-			// 5. Capture the state and stamp the per-episode owner map (already in blue-first slot order).
+			// 5. Optional spawn-curriculum override: on a fraction of episodes, replace the native kickoff
+			//    with a custom (easy) spawn written to the LIVE arena (ball center+still, each car at distance
+			//    d along the kickoff axis facing and moving toward the ball).
+			if (spawn && spawn->enabled
+				&& std::uniform_real_distribution<float>(0.0f, 1.0f)(rng) < spawn->prob) {
+				float d = SPAWN_MIN_DIST + (SPAWN_MAX_DIST - SPAWN_MIN_DIST) * (1.0f - spawn->ratio);
+
+				// Ball at center, still.
+				BallState bs = {};
+				bs.pos = Vec(0.0f, 0.0f, CommonValues::BALL_RADIUS);
+				bs.vel = Vec(0.0f, 0.0f, 0.0f);
+				bs.angVel = Vec(0.0f, 0.0f, 0.0f);
+				arena->ball->SetState(bs);
+
+				// Each car at distance d along the kickoff axis, facing + moving toward the center ball.
+				for (Car* car : arena->_cars) {
+					bool blue = (car->team == Team::BLUE);
+					float sgn = blue ? -1.0f : 1.0f;        // blue defends -y (spawns at -d, faces +y)
+					Vec fwd(0.0f, -sgn, 0.0f);              // unit vector from car toward center ball
+					Vec up(0.0f, 0.0f, 1.0f);
+					Vec right = up.Cross(fwd);
+					RotMat rot(fwd, right, up);             // col0=forward, col2=up (what obs reads)
+
+					CarState cs = {};
+					cs.pos = Vec(0.0f, sgn * d, RLConst::CAR_SPAWN_REST_Z);
+					cs.vel = fwd * SPAWN_APPROACH_SPEED;
+					cs.angVel = Vec(0.0f, 0.0f, 0.0f);
+					cs.rotMat = rot;
+					car->SetState(cs);
+				}
+			}
+
+			// 6. Capture the state and stamp the per-episode owner map (already in blue-first slot order).
 			GameState state(arena);
 			state.slotOwners = botIds;
 			return state;
@@ -114,60 +168,6 @@ namespace RLGSC {
 
 			return GameState(arena);
 		}
-	};
-
-	// SpawnHolder: mutable holder for spawn-curriculum config.
-	struct SpawnHolder {
-		bool enabled = false;
-		float ratio = 1.0f; // scaffold blend 1->0
-		float prob = 0.5f;  // fraction of episodes using custom spawn
-	};
-
-	// SpawnCurriculumMutator: fabricates a custom (easy) spawn on a fraction of episodes.
-	class SpawnCurriculumMutator : public StateSetter {
-	public:
-		SpawnHolder* holder;
-		float minDist = 400.0f;   // SPAWN_MIN_DIST
-		float maxDist = 4000.0f;  // SPAWN_MAX_DIST
-		float approachSpeed = 1000.0f;
-
-		SpawnCurriculumMutator(SpawnHolder* holder) : holder(holder) {}
-
-		virtual GameState ResetState(Arena* arena) override {
-			GameState state(arena);
-
-			if (!holder->enabled) return state; // no-op if disabled
-
-			// Sample whether to use custom spawn
-			std::uniform_real_distribution<float> probDist(0.0f, 1.0f);
-			if (probDist(rng) > holder->prob) return state; // use native kickoff
-
-			// Compute spawn distance
-			float d = minDist + (maxDist - minDist) * (1.0f - holder->ratio);
-
-			// Override player spawns: each car at distance d from ball, facing the ball
-			for (auto& player : state.players) {
-				Vec ballPos = state.ballState.pos;
-				float yaw = atan2f(ballPos.y - player.carState.pos.y, ballPos.x - player.carState.pos.x);
-
-				// Position car at distance d from ball along kickoff axis
-				player.carState.pos.x = ballPos.x - d * cosf(yaw);
-				player.carState.pos.y = ballPos.y - d * sinf(yaw);
-				player.carState.pos.z = RLConst::CAR_SPAWN_REST_Z;
-
-				// Face toward ball
-				player.carState.rotMat = Angle(yaw, 0, 0).ToRotMat();
-
-				// Initial speed toward ball
-				player.carState.vel.x = -approachSpeed * cosf(yaw);
-				player.carState.vel.y = -approachSpeed * sinf(yaw);
-			}
-
-			return state;
-		}
-
-	private:
-		std::mt19937 rng;
 	};
 
 } // namespace RLGSC

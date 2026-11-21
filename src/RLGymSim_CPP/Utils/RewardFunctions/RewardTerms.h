@@ -622,67 +622,118 @@ namespace RLGSC {
 	};
 
 	// ============================================================================
-	// ComposedReward: linear combination of reward terms with team_spirit/opponent_punish
-	// Mirrors reference/reference/reward.py ComposedReward.
+	// MemberRewardSpec: one league member's reward "program" — the set of terms that bot selects
+	// (name -> weight) plus its own team_spirit / opponent_punish scalars. Mirrors the per-slot tuple
+	// in reference reward.py ComposedReward.set_matchup: (reward_dict, team_spirit, opponent_punish).
+	// ============================================================================
+	struct MemberRewardSpec {
+		std::unordered_map<std::string, float> termWeights; // selected term name -> weight
+		float teamSpirit = 0.6f;
+		float opponentPunish = 1.0f;
+	};
+
+	// ============================================================================
+	// ComposedReward: per-bot term routing + team_spirit/opponent_punish blending.
+	//
+	// Faithful port of reference reward.py ComposedReward.get_rewards. Unlike the per-player
+	// RewardFunction::GetReward default (which cannot see teammates), this overrides the BATCHED
+	// GetAllRewards so it can (1) compute every registered term's raw per-slot value, (2) route each
+	// term's per-slot contribution to ONLY the slots whose owner selects that term (scaled by that
+	// owner's weight), then (3) blend each slot's routed scalar with its teammates' routed scalars at
+	// the EXPLICIT n_blue boundary (uneven teams), applying that slot's own team_spirit/opponent_punish.
+	//
+	// Delta terms: each term keeps a per-slot raw cache seeded at reset, so the first step's delta is
+	// 0 and each later delta is raw(t) - raw(t-1) (mirrors Python self._last_raw[t.name] vector).
 	// ============================================================================
 	class ComposedReward : public RewardFunction {
 	public:
 		std::vector<RewardTerm*> terms;
-		std::unordered_map<std::string, float> termWeights; // per-term weights
-		float teamSpirit = 0.0f;    // blending factor for team_spirit (0 = self-only)
-		float opponentPunish = 1.0f; // scaling for opponent punish
+		std::vector<MemberRewardSpec> members; // indexed by owner/member id (== GameState.slotOwners value)
 
-		ComposedReward() : teamSpirit(0.0f), opponentPunish(1.0f) {}
+		// Per-term, per-slot raw cache (the delta-term "last raw" vector). Parallel to `terms`.
+		std::vector<std::vector<float>> lastRaw;
 
-		void addTerm(const std::string& name, RewardTerm* term, float weight = 1.0f) {
-			terms.push_back(term);
-			termWeights[name] = weight;
+		ComposedReward(std::vector<RewardTerm*> terms, std::vector<MemberRewardSpec> members)
+			: terms(std::move(terms)), members(std::move(members)) {}
+
+		virtual void Reset(const GameState& initialState) override {
+			RewardFunction::Reset(initialState);
+			// Seed each term's per-slot raw cache to the initial frame so the first step's delta is 0.
+			int n = (int)initialState.players.size();
+			lastRaw.assign(terms.size(), std::vector<float>());
+			for (size_t i = 0; i < terms.size(); i++) {
+				std::vector<float> raw(n, 0.0f);
+				for (int j = 0; j < n; j++)
+					raw[j] = terms[i]->computeRaw(initialState.players[j], initialState, Action{})[0];
+				lastRaw[i] = std::move(raw);
+			}
 		}
 
-		protected:
-			virtual void Reset(const GameState& initialState) override {
-				RewardFunction::Reset(initialState);
-				for (auto* t : terms) t->Reset(initialState);
-			}
+		virtual std::vector<float> GetAllRewards(const GameState& state, const ActionSet& prevActions, bool final) override {
+			int n = (int)state.players.size();
+			std::vector<float> routed(n, 0.0f);
 
-			virtual void PreStep(const GameState& state) override {
-				RewardFunction::PreStep(state);
-				for (auto* t : terms) t->PreStep(state);
-			}
-
-			virtual float GetReward(const PlayerData& player, const GameState& state, const Action& prevAction) override {
-				float reward = 0.0f;
-				for (int i = 0; i < (int)terms.size(); i++) {
-					auto* t = terms[i];
-					float raw = t->computeRawScalar(player, state, prevAction);
-					float w = termWeights[t->name];
-					reward += raw * w;
-
-					// Capture raw for delta terms
+			// 1. Compute every term's raw per slot, take the delta, route to slots whose owner selects it.
+			for (size_t i = 0; i < terms.size(); i++) {
+				RewardTerm* t = terms[i];
+				for (int j = 0; j < n; j++) {
+					float raw = t->computeRaw(state.players[j], state, prevActions[j])[0];
+					float contrib;
 					if (t->isDelta) {
-						t->captureRaw(raw);
-					}
-				}
-
-				// Team spirit blending
-				if (teamSpirit != 0.0f) {
-					float teamReward = 0.0f;
-					for (const PlayerData& p : state.players) {
-						if (p.team == player.team) {
-							for (int i = 0; i < (int)terms.size(); i++) {
-								teamReward += terms[i]->computeRawScalar(p, state, prevAction) * termWeights[terms[i]->name];
-							}
+						float prev = (i < lastRaw.size() && j < (int)lastRaw[i].size()) ? lastRaw[i][j] : 0.0f;
+						contrib = raw - prev;
+						if (i < lastRaw.size()) {
+							if ((int)lastRaw[i].size() <= j) lastRaw[i].resize(n, 0.0f);
+							lastRaw[i][j] = raw;
 						}
+					} else {
+						contrib = raw;
 					}
-					reward = (1.0f - teamSpirit) * reward + teamSpirit * teamReward;
+					int owner = (j < (int)state.slotOwners.size()) ? state.slotOwners[j] : 0;
+					if (owner < 0 || owner >= (int)members.size()) owner = 0;
+					auto it = members[owner].termWeights.find(t->name);
+					if (it != members[owner].termWeights.end())
+						routed[j] += it->second * contrib;
 				}
-
-				return reward;
 			}
 
-			virtual ~ComposedReward() override {
-				for (auto* t : terms) delete t;
+			// 2. Blend at the explicit n_blue boundary (players are in blue-first order).
+			int mid = 0;
+			for (int j = 0; j < n; j++)
+				if (state.players[j].team == Team::BLUE) mid++;
+			float bm = 0.0f, om = 0.0f; int nb = 0, no = 0;
+			for (int j = 0; j < n; j++) {
+				if (j < mid) { bm += routed[j]; nb++; }
+				else { om += routed[j]; no++; }
 			}
+			if (nb) bm /= (float)nb;
+			if (no) om /= (float)no;
+
+			std::vector<float> out(n, 0.0f);
+			for (int j = 0; j < n; j++) {
+				int owner = (j < (int)state.slotOwners.size()) ? state.slotOwners[j] : 0;
+				if (owner < 0 || owner >= (int)members.size()) owner = 0;
+				float ts = members[owner].teamSpirit;
+				float op = members[owner].opponentPunish;
+				float own = routed[j];
+				if (j < mid) out[j] = (1.0f - ts) * own + ts * bm - op * om;
+				else         out[j] = (1.0f - ts) * own + ts * om - op * bm;
+			}
+			return out;
+		}
+
+		virtual ~ComposedReward() override {
+			for (auto* t : terms) delete t;
+		}
 	};
+
+	// Build a fresh instance of every registered term (one ComposedReward owns its own term objects).
+	inline std::vector<RewardTerm*> MakeAllRewardTerms() {
+		auto reg = TermRegistry::getTerms();
+		std::vector<RewardTerm*> out;
+		out.reserve(reg.size());
+		for (auto& kv : reg) out.push_back(kv.second());
+		return out;
+	}
 
 } // namespace RLGSC
