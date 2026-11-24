@@ -27,19 +27,37 @@ namespace RLGSC {
 		}
 	};
 
-	// ScoreboardTimeCondition: terminal when time runs out
+	// ScoreboardTimeCondition: terminal when the (pseudo-)match clock runs out, or overtime exceeds
+	// maxOvertimeSeconds. Mirrors the reference ScoreboardTimeCondition: the clock's `finished` latch
+	// (ticksLeft == -inf) is an immediate terminal; while `isOvertime` (ticksLeft == +inf) the episode runs
+	// until maxOvertimeSeconds elapse since overtime began. The clock's per-episode cap (drill vs native) is
+	// what makes drill episodes cheap and lets 1v0 drill episodes hard-stop on drill-time.
 	class ScoreboardTimeCondition : public TerminalCondition {
 	public:
-		int targetTime; // target time in ticks (default: 60s * 120fps = 7200)
+		float maxOvertimeSeconds; // overtime grace before a tied game is force-truncated
+		uint64_t overtimeStartTick = 0;
+		bool overtimeStarted = false;
 
-		ScoreboardTimeCondition(int targetTime = 7200) : targetTime(targetTime) {}
+		ScoreboardTimeCondition(float maxOvertimeSeconds = 300.0f) : maxOvertimeSeconds(maxOvertimeSeconds) {}
 
 		void Reset(const GameState& initialState) override {
 			TerminalCondition::Reset(initialState);
+			overtimeStarted = false;
+			overtimeStartTick = 0;
 		}
 
 		virtual bool IsTerminal(const GameState& currentState) override {
-			return currentState.tickCount >= (uint64_t)targetTime;
+			if (currentState.finished)
+				return true; // regulation expired with a non-tie, or an overtime goal ended it
+			if (currentState.isOvertime) {
+				if (!overtimeStarted) {
+					overtimeStarted = true;
+					overtimeStartTick = currentState.tickCount;
+				}
+				float elapsed = (float)(currentState.tickCount - overtimeStartTick) / CommonValues::kTicksPerSecond;
+				return elapsed >= maxOvertimeSeconds;
+			}
+			return false;
 		}
 	};
 

@@ -64,13 +64,21 @@ namespace RLGSC {
 		int scoringTeam = -1;               // Team that scored last (-1 = none)
 		uint64_t tickCount = 0;             // Global tick counter
 
-		// Match clock (read by the obs tactical block). ticksLeft counts down in ticks;
-		// isOvertime is true once regulation expires with a tied score. finished is true once the
-		// game is over (regulation expired with a non-tie, or an overtime goal was scored).
-		// Mirrors reference Scoreboard: ticksLeft is +inf in overtime, -inf when finished.
-		float ticksLeft = 0;
-		bool isOvertime = false;
-		bool finished = false;
+	// Match clock (read by the obs tactical block). ticksLeft counts down in ticks;
+	// isOvertime is true once regulation expires with a tied score. finished is true once the
+	// game is over (regulation expired with a non-tie, or an overtime goal was scored).
+	// Mirrors reference Scoreboard: ticksLeft is +inf in overtime, -inf when finished.
+	float ticksLeft = 0;
+	bool isOvertime = false;
+	bool finished = false;
+
+	// Per-episode regulation cap (seconds) the clock initializes to on its first update, and whether this
+	// episode is a curriculum DRILL. The wheel mutator stamps both before returning the reset state: a
+	// drill episode caps the clock short (drill_time) so early epochs are cheap to collect, and on expiry a
+	// drill HARD-STOPS (finished=true, no overtime) so 1v0 drill episodes terminate on goal OR drill-time.
+	// A native episode keeps the full regulation cap and the normal tie->overtime behavior.
+	float maxTimeSeconds = CommonValues::kMaxTimeSeconds;
+	bool drillActive = false;
 
 		// Dropshot tile damage grid (raw damage levels FULL=0/DAMAGED=1/BROKEN=2), flattened
 		// [team][tile] = 2*70 = 140 cells. Zeroed for non-dropshot modes.

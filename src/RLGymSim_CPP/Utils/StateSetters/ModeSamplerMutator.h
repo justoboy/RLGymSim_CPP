@@ -21,35 +21,48 @@ namespace RLGSC {
 		GameMode mode = GameMode::SOCCAR;
 	};
 
-	// Mutable holder for the spawn-curriculum config (read by TeamConfigMutator on every reset).
-	//   enabled: when false the spawn override is a no-op (every episode uses the native kickoff).
-	//   ratio:   scaffold blend 1->0. d = MIN + (MAX-MIN)*(1-ratio).
-	//   prob:    fraction of episodes that use the custom (easy) spawn; the rest stay native kickoff.
-	struct SpawnHolder {
-		bool enabled = false;
-		float ratio = 1.0f; // scaffold blend 1->0
-		float prob = 0.5f;  // fraction of episodes using custom spawn
+	// Mutable holder for the TWO-WHEEL spawn curriculum (read by TeamConfigMutator on every reset).
+	// Two INDEPENDENT wheels (touch + goal), each with its own state machine living in the driver. The
+	// driver advances each wheel's streak/score per EPOCH and writes the resulting per-wheel geometry +
+	// fire-probability here; the mutator then rolls each drill's Bernoulli PER EPISODE (the C++ learner
+	// auto-resets games internally, so the per-episode decision lives in the mutator, not the driver).
+	//   touch_enabled/touch_d/touch_prob: touch wheel ON, car->ball spawn distance, per-episode fire prob.
+	//   goal_enabled/goal_ball_y/goal_prob: goal wheel ON, ball |y| on the lone car's attack axis, fire prob.
+	//   drill_time: episode clock cap (seconds) while any drill is active (short = cheap collection).
+	// When a wheel is OFF (enabled=false) the mutator never fires that drill (native kickoff on that axis).
+	struct WheelHolder {
+		bool  touch_enabled = false;
+		float touch_d       = 400.0f;
+		float touch_prob    = 0.5f;
+		bool  goal_enabled  = false;
+		float goal_ball_y   = 0.0f;
+		float goal_prob     = 0.5f;
+		float drill_time    = 10.0f;  // clock cap (s) while a drill is active
+		float native_time   = 300.0f; // clock cap (s) on a native (non-drill) episode
 	};
 
 	// Custom-spawn geometry (mirrors the reference scaffold constants).
-	inline constexpr float SPAWN_MIN_DIST = 400.0f;     // ball basically on the car (ratio=1)
-	inline constexpr float SPAWN_MAX_DIST = 4000.0f;    // real kickoff gap (ratio=0)
+	inline constexpr float SPAWN_MIN_DIST = 400.0f;     // ball basically on the car (touch g=1)
+	inline constexpr float SPAWN_MAX_DIST = 4000.0f;    // real kickoff gap (touch g=0)
 	inline constexpr float SPAWN_APPROACH_SPEED = 1000.0f; // initial car speed (uu/s) aimed at the ball
 
-	// TeamConfigMutator: per-episode active-set spawner + matchup sampler (+ optional spawn curriculum).
+	// TeamConfigMutator: per-episode active-set spawner + matchup sampler + two-wheel drill override.
 	//
-	// Faithful port of the reference TeamConfigMutator + sample_team_config + League.draw_sibling/
-	// self_matchup (and the SpawnCurriculumMutator override that runs after it). On every reset it:
-	// (1) samples one (n_blue, n_orange) from the weighted pool, (2) spawns exactly n_blue blue +
-	// n_orange orange cars into the fresh empty arena (blue-first by id), (3) runs the native random
-	// kickoff to reposition them + the ball, (4) on a fraction of episodes overrides the live ball +
-	// car states with a custom (easy) spawn, and (5) stamps the per-episode owner map into
-	// GameState::slotOwners for the learner to route each slot's trajectory to its owning member.
+	// Faithful port of the reference TeamConfigMutator + SpawnCurriculumMutator. The C++ learner auto-resets
+	// each game internally (the driver only sees per-EPOCH aggregate reports), so the per-episode drill
+	// Bernoulli lives HERE in the mutator, not in the driver: on every reset it
+	// (1) samples one (n_blue, n_orange) from the weighted pool (the native/touch lineup),
+	// (2) rolls each wheel's per-episode Bernoulli from the holder's prob,
+	// (3) on a GOAL drill forces a 1v0 lineup (single BLUE car) and writes the ball at +goal_ball_y on the
+	//     lone car's attack axis, car behind the ball facing it; on a TOUCH drill keeps the sampled lineup
+	//     and places each car at distance d from the center ball facing it; otherwise native kickoff,
+	// (4) stamps the per-episode clock cap (drill_time on a drill, native_time otherwise) + drillActive flag,
+	// (5) stamps the per-episode owner map into GameState::slotOwners.
 	//
-	// The spawn override writes to the LIVE arena (ball->SetState / car->SetState), mirroring
-	// RandomState, so the engine actually simulates the custom spawn (the old snapshot-only override
-	// never reached the engine). A single-bot self-play run is the degenerate case: one member,
-	// siblingFraction 0, every config (1,1) -> every slot owned by member 0.
+	// The driver advances each wheel's streak/score state machine per EPOCH and writes the resulting geometry
+	// + fire-probability into the shared WheelHolder (SetWheelConfig); the mutator reads that holder here.
+	// A single-bot self-play run is the degenerate case: one member, siblingFraction 0, every slot owned by
+	// member 0; the goal drill's lone car is BLUE (attacks +y), the touch drill keeps the sampled matchup.
 	class TeamConfigMutator : public StateSetter {
 	public:
 		// Weighted pool of (n_blue, n_orange) team configs (mirrors DEFAULT_TEAM_CONFIGS/WEIGHTS).
@@ -59,29 +72,37 @@ namespace RLGSC {
 		int memberCount = 1;
 		// Fraction of episodes that draw a mixed-lineage (sibling) matchup vs. all-slots-one-bot self.
 		float siblingFraction = 0.0f;
-		// Optional spawn-curriculum holder (nullptr => always native kickoff).
-		SpawnHolder* spawn = nullptr;
+		// Two-wheel curriculum holder (nullptr => always native kickoff).
+		WheelHolder* wheel = nullptr;
 		std::mt19937 rng;
 
 		TeamConfigMutator(const std::vector<std::pair<int, int>>& configs,
 		                  const std::vector<float>& weights,
 		                  int memberCount, float siblingFraction, uint32_t seed,
-		                  SpawnHolder* spawn = nullptr)
+		                  WheelHolder* wheel = nullptr)
 			: teamConfigs(configs), teamWeights(weights),
-			  memberCount(memberCount), siblingFraction(siblingFraction), spawn(spawn), rng(seed) {
+			  memberCount(memberCount), siblingFraction(siblingFraction), wheel(wheel), rng(seed) {
 			assert(teamConfigs.size() == teamWeights.size());
 			assert(memberCount >= 1);
 		}
 
 		virtual GameState ResetState(Arena* arena) override {
-			// 1. Sample one (n_blue, n_orange) from the weighted pool.
+			// 1. Sample one (n_blue, n_orange) from the weighted pool (the native / touch-drill lineup).
 			std::discrete_distribution<int> cfgDist(teamWeights.begin(), teamWeights.end());
 			auto [nBlue, nOrange] = teamConfigs[cfgDist(rng)];
+
+			// 2. Roll each wheel's per-episode Bernoulli from the holder's fire probability.
+			bool touchFire = wheel && wheel->touch_enabled
+				&& std::uniform_real_distribution<float>(0.0f, 1.0f)(rng) < wheel->touch_prob;
+			bool goalFire  = wheel && wheel->goal_enabled
+				&& std::uniform_real_distribution<float>(0.0f, 1.0f)(rng) < wheel->goal_prob;
+
+			// A goal drill forces a 1v0 lineup (the lone car is the owner's; BLUE so it attacks +y).
+			if (goalFire) { nBlue = 1; nOrange = 0; }
 			int n = nBlue + nOrange;
 
-			// 2. Build the per-slot owner list (blue-first slot order: first nBlue slots blue, rest orange).
-			//    Self-play: every slot -> member 0. Sibling: cycle member ids across the n slots then shuffle
-			//    so each bot lands on each team over time (mirrors League.draw_sibling).
+			// 3. Build the per-slot owner list (blue-first slot order). Self-play: every slot -> member 0.
+			//    Sibling: cycle member ids across the n slots then shuffle (mirrors League.draw_sibling).
 			std::vector<int> botIds(n, 0);
 			bool sibling = memberCount > 1
 				&& std::uniform_real_distribution<float>(0.0f, 1.0f)(rng) < siblingFraction;
@@ -91,41 +112,60 @@ namespace RLGSC {
 				std::shuffle(botIds.begin(), botIds.end(), rng);
 			} // else: self-play, botIds stays all-zero.
 
-			// 3. The Arena is built FRESH and EMPTY on every Reset() (see Gym::Reset), so we only ADD this
+			// 4. The Arena is built FRESH and EMPTY on every Reset() (see Gym::Reset), so we only ADD this
 			//    episode's active set: blue cars first (ascending id), then orange (ascending id), so the
 			//    deterministic (team,id) sort in GameState::UpdateFromArena reproduces blue-first slot order.
-			//    We never RemoveCar on a live world (that corrupts this fork's Bullet state).
 			for (int i = 0; i < nBlue; i++)
 				arena->AddCar(Team::BLUE, CAR_CONFIG_OCTANE);
 			for (int i = 0; i < nOrange; i++)
 				arena->AddCar(Team::ORANGE, CAR_CONFIG_OCTANE);
 
-			// 4. Native random kickoff repositions the now-existing cars + ball.
+			// 5. Native random kickoff repositions the now-existing cars + ball (overridden below on a drill).
 			arena->ResetToRandomKickoff();
 
-			// 5. Optional spawn-curriculum override: on a fraction of episodes, replace the native kickoff
-			//    with a custom (easy) spawn written to the LIVE arena (ball center+still, each car at distance
-			//    d along the kickoff axis facing and moving toward the ball).
-			if (spawn && spawn->enabled
-				&& std::uniform_real_distribution<float>(0.0f, 1.0f)(rng) < spawn->prob) {
-				float d = SPAWN_MIN_DIST + (SPAWN_MAX_DIST - SPAWN_MIN_DIST) * (1.0f - spawn->ratio);
+			bool drill = false;
+			if (goalFire) {
+				// GOAL drill: ball on the lone (BLUE) car's attack axis at +goal_ball_y, still; car behind
+				// the ball (smaller y) facing +y toward it. The opponent's absence is the binary difficulty.
+				drill = true;
+				float by = wheel->goal_ball_y;
+				BallState bs = {};
+				bs.pos = Vec(0.0f, by, CommonValues::BALL_RADIUS);
+				bs.vel = Vec(0.0f, 0.0f, 0.0f);
+				bs.angVel = Vec(0.0f, 0.0f, 0.0f);
+				arena->ball->SetState(bs);
 
-				// Ball at center, still.
+				Car* car = arena->_cars.empty() ? nullptr : *arena->_cars.begin();
+				if (car) {
+					float d = wheel->touch_d;
+					Vec fwd(0.0f, 1.0f, 0.0f);                 // lone BLUE car attacks +y (toward the ball)
+					Vec up(0.0f, 0.0f, 1.0f);
+					Vec right = up.Cross(fwd);
+					RotMat rot(fwd, right, up);
+					CarState cs = {};
+					cs.pos = Vec(0.0f, by - d, RLConst::CAR_SPAWN_REST_Z); // behind the ball (farther from goal)
+					cs.vel = fwd * SPAWN_APPROACH_SPEED;
+					cs.angVel = Vec(0.0f, 0.0f, 0.0f);
+					cs.rotMat = rot;
+					car->SetState(cs);
+				}
+			} else if (touchFire) {
+				// TOUCH drill: ball at center, still; each car at distance d along the kickoff axis facing it.
+				drill = true;
+				float d = wheel->touch_d;
 				BallState bs = {};
 				bs.pos = Vec(0.0f, 0.0f, CommonValues::BALL_RADIUS);
 				bs.vel = Vec(0.0f, 0.0f, 0.0f);
 				bs.angVel = Vec(0.0f, 0.0f, 0.0f);
 				arena->ball->SetState(bs);
 
-				// Each car at distance d along the kickoff axis, facing + moving toward the center ball.
 				for (Car* car : arena->_cars) {
 					bool blue = (car->team == Team::BLUE);
 					float sgn = blue ? -1.0f : 1.0f;        // blue defends -y (spawns at -d, faces +y)
 					Vec fwd(0.0f, -sgn, 0.0f);              // unit vector from car toward center ball
 					Vec up(0.0f, 0.0f, 1.0f);
 					Vec right = up.Cross(fwd);
-					RotMat rot(fwd, right, up);             // col0=forward, col2=up (what obs reads)
-
+					RotMat rot(fwd, right, up);
 					CarState cs = {};
 					cs.pos = Vec(0.0f, sgn * d, RLConst::CAR_SPAWN_REST_Z);
 					cs.vel = fwd * SPAWN_APPROACH_SPEED;
@@ -135,9 +175,12 @@ namespace RLGSC {
 				}
 			}
 
-			// 6. Capture the state and stamp the per-episode owner map (already in blue-first slot order).
+			// 6. Capture the state, stamp the per-episode owner map + clock cap (drill vs native).
 			GameState state(arena);
 			state.slotOwners = botIds;
+			state.drillActive = drill;
+			state.maxTimeSeconds = (drill && wheel) ? wheel->drill_time
+				: (wheel ? wheel->native_time : CommonValues::kMaxTimeSeconds);
 			return state;
 		}
 	};
