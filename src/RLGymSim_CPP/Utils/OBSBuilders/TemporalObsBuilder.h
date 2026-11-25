@@ -5,21 +5,25 @@
 #include <array>
 
 // TemporalObsBuilder: per-agent temporal observation in the agent's self-relative,
-// team-inverted frame. Each agent's flattened obs is the concatenation q ++ kv ++ m:
-//   q:  query_features (208) = self entity row (39) + direct ball block (12) + tactical (3)
-//       + mode token (1) + mode fields (11: ball_type + heatseeker(3) + mutator(6) + charge(1))
-//       + tile block (140) + team-size (2)
-//   kv: (F*n_bc + MAX_BOOST_PADS) tokens * kv_features (69); ball+cars replicated across the
+// team-inverted frame. Each agent's flattened obs is the concatenation q ++ kv ++ m ++ mode:
+//   q:  query_features (195) = q_self (34 = the non-IS_* cols of the self entity row)
+//       + direct ball block (6: absolute ball pos+vel) + tactical (3)
+//       + mode fields (10: heatseeker(3) + mutator(6) + charge(1)) + tile block (140) + team-size (2)
+//   kv: (F*n_bc + MAX_BOOST_PADS) tokens * kv_features (64); ball+cars replicated across the
 //       F temporal frames (frame-major), boost pads emit ONE token at the latest frame only
 //   m:  (F*n_bc + MAX_BOOST_PADS) attention mask (1 = ignore), constant per match
+//   mode: a single trailing scalar (the Python-reference mode code int, 0..6) feeding the model's
+//       mode embedding. The mode is NO LONGER a float column inside q (the old ordinal-scalar bug).
 //
 // Entity row layout (39 = 25 world + 14 profile):
 //   [0] IS_SELF [1] IS_MATE [2] IS_OPP [3] IS_BALL [4] IS_BOOST
 //   [5..7] pos [8..10] linVel [11..13] forward [14..16] up [17..19] angVel
 //   [20] boost [21] demo [22] onGround [23] hasFlip [24] hasJump
 //   [25..38] behavioral profile (14)
-// Relative block (30): 6 groups {yawX, yawY, rawZ, fullX, fullY, fullZ} x 5 vector blocks
-//   {pos, linVel, forward, up, angVel}; the pos block is self-relative (minus self pos).
+// q_self = the 34 NON-IS_* cols (entity cols [5,39)); IS_* stays a float one-hot only on kv.
+// Relative block (25): 5 groups {yawX, yawY, fullX, fullY, fullZ} x 5 vector blocks
+//   {pos, linVel, forward, up, angVel}; the pos block is self-relative (minus self pos). The old
+//   rawZ (world-Z duplicate) group is dropped (it duplicated the entity block's own Z columns).
 
 namespace RLGSC {
 
@@ -32,9 +36,9 @@ namespace RLGSC {
 		constexpr int N_PROFILE = 14;
 		constexpr int PROFILE = 25;
 		constexpr int ENTITY_FEATURES = 39;
-		constexpr int RELATIVE_FEATURES = 30;
-		constexpr int KV_FEATURES = 69;
-		constexpr int N_BALL_QUERY = 12;
+		constexpr int RELATIVE_FEATURES = 25;
+		constexpr int KV_FEATURES = 64;
+		constexpr int N_BALL_QUERY = 6;
 		constexpr int MAX_TEAM = 4;
 		constexpr int MAX_BOOST_PADS = 34;
 		constexpr int N_TEMPORAL_FRAMES = 13;
@@ -73,10 +77,12 @@ namespace RLGSC {
 		static constexpr int N_BC = 1 + N_SLOTS;                                // ball + cars = 9
 		static constexpr int N_ENTITIES = N_BC + ObsLayout::MAX_BOOST_PADS;     // 43
 		static constexpr int ENTITY_FEATURES = ObsLayout::ENTITY_FEATURES;      // 39
-		static constexpr int KV_FEATURES = ObsLayout::KV_FEATURES;              // 69
+		static constexpr int KV_FEATURES = ObsLayout::KV_FEATURES;              // 64
 		static constexpr int N_TOKENS = N_FRAMES * N_BC + ObsLayout::MAX_BOOST_PADS; // 151
+		// q = q_self (34 non-IS_* cols) + ball block (6) + [tactical (3) + mode fields (10) +
+		// tiles (140) + team-size (2)] = 34 + 6 + 155 = 195.
 		static constexpr int QUERY_FEATURES =
-			ObsLayout::ENTITY_FEATURES + ObsLayout::N_BALL_QUERY + 157;         // 208
+			(ObsLayout::ENTITY_FEATURES - 5) + ObsLayout::N_BALL_QUERY + 155;   // 195
 
 		// Mode + mutator state (set by the sampler mutator each reset). Stored as the arena's
 		// GameMode; converted to the Python-reference ModeCode internally for the mode token.
@@ -93,7 +99,7 @@ namespace RLGSC {
 		void Reset(const GameState& initialState) override;
 		void PreStep(const GameState& state) override;
 
-		// Returns flattened obs for this player: q ++ kv ++ m.
+		// Returns flattened obs for this player: q (195) ++ kv (151*64) ++ m (151) ++ mode (1).
 		FList BuildOBS(const PlayerData& player, const GameState& state, const Action& prevAction) override;
 
 	private:
@@ -140,7 +146,7 @@ namespace RLGSC {
 		// world row and its team-inverted copy into the last frame of worldBuf/invBuf.
 		void encodeFrame(const GameState& state);
 
-		// Per-agent self-relative math: writes flattened (N_TOKENS,69) into out for this agent.
+		// Per-agent self-relative math: writes flattened (N_TOKENS,64) into out for this agent.
 		void relativeAndFlatten(const std::vector<float>& buf, int selfSlot, bool isOrange,
 		                        const GameState& state, const PlayerData& player, FList& out) const;
 

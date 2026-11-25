@@ -387,6 +387,8 @@ FList TemporalObsBuilder::BuildOBS(
 			// token index = f*n_bc + e (frame-major)
 			float* dst = kv.data() + ((size_t)f * N_BC + e) * ObsLayout::KV_FEATURES;
 			for (int c = 0; c < EF; c++) dst[c] = src[c];
+			// 25-wide relative block: 5 groups {yawX, yawY, fullX, fullY, fullZ} x 5 blocks. The old
+			// rawZ (world-Z) group is dropped — it duplicated the entity block's own Z columns.
 			const int rel0 = EF;
 			for (int k = 0; k < 5; k++) {
 				float v0 = xs[k], v1 = ys[k], v2 = zs[k];
@@ -397,10 +399,9 @@ FList TemporalObsBuilder::BuildOBS(
 				float crz = sp * v0 - cp * sr * v1 + cp * cr * v2;
 				dst[rel0 + k] = sanitize(frx);
 				dst[rel0 + 5 + k] = sanitize(fry);
-				dst[rel0 + 10 + k] = sanitize(v2);
-				dst[rel0 + 15 + k] = sanitize(crx);
-				dst[rel0 + 20 + k] = sanitize(cry);
-				dst[rel0 + 25 + k] = sanitize(crz);
+				dst[rel0 + 10 + k] = sanitize(crx);
+				dst[rel0 + 15 + k] = sanitize(cry);
+				dst[rel0 + 20 + k] = sanitize(crz);
 			}
 			// self-row IS_* override (all frames of this agent's entity row)
 			if (e == selfSlot) {
@@ -417,7 +418,7 @@ FList TemporalObsBuilder::BuildOBS(
 	// Pads: one token each, latest frame only (buffer slots N_BC..N_BC+P-1). The pad's 5 vector
 	// blocks get the SAME self-relative rotation as ball/cars (the pos block is made self-relative,
 	// the fw/up/angVel blocks are zero for a static pad so they rotate to zero); Python's
-	// _relative_core rotates every entity in the buffer, pads included, so the 30-col relative block
+	// _relative_core rotates every entity in the buffer, pads included, so the 25-col relative block
 	// must be filled here too (not left zero).
 	for (int p = 0; p < ObsLayout::MAX_BOOST_PADS; p++) {
 		const float* src = buf.data() + (size_t)(N_FRAMES - 1) * N_ENTITIES * EF + (size_t)(N_BC + p) * EF;
@@ -440,10 +441,9 @@ FList TemporalObsBuilder::BuildOBS(
 			float crz = sp * v0 - cp * sr * v1 + cp * cr * v2;
 			dst[rel0 + k] = sanitize(frx);
 			dst[rel0 + 5 + k] = sanitize(fry);
-			dst[rel0 + 10 + k] = sanitize(v2);
-			dst[rel0 + 15 + k] = sanitize(crx);
-			dst[rel0 + 20 + k] = sanitize(cry);
-			dst[rel0 + 25 + k] = sanitize(crz);
+			dst[rel0 + 10 + k] = sanitize(crx);
+			dst[rel0 + 15 + k] = sanitize(cry);
+			dst[rel0 + 20 + k] = sanitize(crz);
 		}
 	}
 
@@ -451,20 +451,18 @@ FList TemporalObsBuilder::BuildOBS(
 	FList q;
 	q.reserve(QUERY_FEATURES);
 
-	// Self entity row (39) = latest-frame self features (entity block only).
+	// q_self (34) = the NON-IS_* cols (5..38) of the latest-frame self entity row. The IS_* one-hot
+	// is strictly constant on the self row (always a car) and stays only on the kv side.
 	const float* qSelf = kv.data() + (size_t)((N_FRAMES - 1) * N_BC + selfSlot) * ObsLayout::KV_FEATURES;
-	for (int c = 0; c < EF; c++) q.push_back(qSelf[c]);
+	for (int c = ObsLayout::POS; c < EF; c++) q.push_back(qSelf[c]);
 
-	// Direct ball block (12): absolute ball pos/vel + ball-relative-to-self pos/vel.
+	// Direct ball block (6): absolute ball pos/vel only (the ball-relative block is reconstructable
+	// from absolute ball + q_self pos/vel, so it is dropped).
 	const float* ballRow = buf.data() + (size_t)(N_FRAMES - 1) * N_ENTITIES * EF; // entity 0
 	float bpx = ballRow[ObsLayout::POS + 0], bpy = ballRow[ObsLayout::POS + 1], bpz = ballRow[ObsLayout::POS + 2];
 	float bvx = ballRow[ObsLayout::LIN_VEL + 0], bvy = ballRow[ObsLayout::LIN_VEL + 1], bvz = ballRow[ObsLayout::LIN_VEL + 2];
-	float qspx = qSelf[ObsLayout::POS + 0], qspy = qSelf[ObsLayout::POS + 1], qspz = qSelf[ObsLayout::POS + 2];
-	float qsvx = qSelf[ObsLayout::LIN_VEL + 0], qsvy = qSelf[ObsLayout::LIN_VEL + 1], qsvz = qSelf[ObsLayout::LIN_VEL + 2];
 	q += { bpx, bpy, bpz };                 // absolute ball pos (3)
 	q += { bvx, bvy, bvz };                 // absolute ball vel (3)
-	q += { bpx - qspx, bpy - qspy, bpz - qspz }; // ball-relative pos (3)
-	q += { bvx - qsvx, bvy - qsvy, bvz - qsvz }; // ball-relative vel (3)
 
 	// Tactical (3): goal_diff (team-signed), time_left, is_overtime.
 	int blueScore = state.scoreLine[0];
@@ -475,12 +473,11 @@ FList TemporalObsBuilder::BuildOBS(
 	float timeLeft = isOvertime ? 0.0f : clampf(state.ticksLeft, 0.0f, 300.0f * 120.0f) / (120.0f * 300.0f);
 	q += { gd, timeLeft, isOvertime ? 1.0f : 0.0f };
 
-	// Mode token (1) + ball_type (1).
+	// Mode is NO LONGER a float column in q (the old ordinal-scalar bug); it is emitted as a trailing
+	// scalar channel (see the obs tail below) and consumed by the model's mode embedding. ball_type is
+	// dropped entirely (a static per-mode lookup, fully determined by the mode embedding).
 	const ModeCode mc = ModeCodeFromGameMode(activeMode);
-	int modeCode = (int)mc;
-	q += (float)modeCode;
-	float ballType = (mc == ModeCode::SPIKE_RUSH) ? 1.0f : 0.0f;
-	q += ballType;
+	const int modeCode = (int)mc;
 
 	// Heatseeker (3): zero unless heatseeker mode.
 	if (mc == ModeCode::HEATSEEKER) {
@@ -522,12 +519,14 @@ FList TemporalObsBuilder::BuildOBS(
 	q += (float)my / ObsLayout::MAX_TEAM;
 	q += (float)opp / ObsLayout::MAX_TEAM;
 
-	// --- Concatenate q ++ kv ++ m ---
+	// --- Concatenate q ++ kv ++ m ++ mode ---
+	// mode is a trailing scalar channel (the ModeCode int) feeding the model's mode embedding.
 	FList obs;
-	obs.reserve(q.size() + kv.size() + maskCache.size());
+	obs.reserve(q.size() + kv.size() + maskCache.size() + 1);
 	obs.insert(obs.end(), q.begin(), q.end());
 	obs.insert(obs.end(), kv.begin(), kv.end());
 	obs.insert(obs.end(), maskCache.begin(), maskCache.end());
+	obs.push_back((float)modeCode);
 	return obs;
 }
 
