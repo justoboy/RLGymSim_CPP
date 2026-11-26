@@ -75,6 +75,10 @@ namespace RLGSC {
 		// Two-wheel curriculum holder (nullptr => always native kickoff).
 		WheelHolder* wheel = nullptr;
 		std::mt19937 rng;
+		// Which drill fired on the most recent ResetState; RespawnAfterGoal re-applies the same spawn so a
+		// mid-episode drill goal returns the ball to the drill spawn instead of resting in the net.
+		bool lastGoalFire = false;
+		bool lastTouchFire = false;
 
 		TeamConfigMutator(const std::vector<std::pair<int, int>>& configs,
 		                  const std::vector<float>& weights,
@@ -123,11 +127,39 @@ namespace RLGSC {
 			// 5. Native random kickoff repositions the now-existing cars + ball (overridden below on a drill).
 			arena->ResetToRandomKickoff();
 
-			bool drill = false;
+			bool drill = goalFire || touchFire;
+			lastGoalFire = goalFire;
+			lastTouchFire = touchFire;
+			if (drill)
+				ApplyDrillSpawn(arena, goalFire, touchFire, /*preserveBoost=*/false);
+
+			// 6. Capture the state, stamp the per-episode owner map + clock cap (drill vs native).
+			GameState state(arena);
+			state.slotOwners = botIds;
+			state.drillActive = drill;
+			state.maxTimeSeconds = (drill && wheel) ? wheel->drill_time
+				: (wheel ? wheel->native_time : CommonValues::kMaxTimeSeconds);
+			return state;
+		}
+
+		// Mid-episode respawn after a drill goal: re-apply the same drill spawn (ball + cars) so the ball
+		// leaves the net. GameState::UpdateFromArena detects goals by ball POSITION, so a ball resting in
+		// the net would re-increment scoreLine every tick; returning it to the drill spawn both fixes that
+		// and lets the curriculum wheels observe repeated goal events. Boost is preserved (a goal must not
+		// hand out free boost). No-op when the last reset was not a drill.
+		virtual void RespawnAfterGoal(Arena* arena) override {
+			if (!lastGoalFire && !lastTouchFire)
+				return;
+			ApplyDrillSpawn(arena, lastGoalFire, lastTouchFire, /*preserveBoost=*/true);
+		}
+
+	private:
+		// Shared drill spawn geometry, used by ResetState (fresh cars, boost 0) and RespawnAfterGoal
+		// (mid-episode, boost preserved). Exactly mirrors the original inline spawn.
+		void ApplyDrillSpawn(Arena* arena, bool goalFire, bool touchFire, bool preserveBoost) {
 			if (goalFire) {
 				// GOAL drill: ball on the lone (BLUE) car's attack axis at +goal_ball_y, still; car behind
 				// the ball (smaller y) facing +y toward it. The opponent's absence is the binary difficulty.
-				drill = true;
 				float by = wheel->goal_ball_y;
 				BallState bs = {};
 				bs.pos = Vec(0.0f, by, CommonValues::BALL_RADIUS);
@@ -147,11 +179,12 @@ namespace RLGSC {
 					cs.vel = fwd * SPAWN_APPROACH_SPEED;
 					cs.angVel = Vec(0.0f, 0.0f, 0.0f);
 					cs.rotMat = rot;
+					if (preserveBoost)
+						cs.boost = car->GetState().boost;
 					car->SetState(cs);
 				}
 			} else if (touchFire) {
 				// TOUCH drill: ball at center, still; each car at distance d along the kickoff axis facing it.
-				drill = true;
 				float d = wheel->touch_d;
 				BallState bs = {};
 				bs.pos = Vec(0.0f, 0.0f, CommonValues::BALL_RADIUS);
@@ -171,17 +204,11 @@ namespace RLGSC {
 					cs.vel = fwd * SPAWN_APPROACH_SPEED;
 					cs.angVel = Vec(0.0f, 0.0f, 0.0f);
 					cs.rotMat = rot;
+					if (preserveBoost)
+						cs.boost = car->GetState().boost;
 					car->SetState(cs);
 				}
 			}
-
-			// 6. Capture the state, stamp the per-episode owner map + clock cap (drill vs native).
-			GameState state(arena);
-			state.slotOwners = botIds;
-			state.drillActive = drill;
-			state.maxTimeSeconds = (drill && wheel) ? wheel->drill_time
-				: (wheel ? wheel->native_time : CommonValues::kMaxTimeSeconds);
-			return state;
 		}
 	};
 

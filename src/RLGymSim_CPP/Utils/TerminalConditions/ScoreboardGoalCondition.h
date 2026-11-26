@@ -16,6 +16,13 @@ namespace RLGSC {
 		}
 
 		virtual bool IsTerminal(const GameState& currentState) override {
+			// On a curriculum DRILL episode the goal is the OBJECTIVE, not the end condition: terminating on
+			// a goal lets the agent avoid scoring to keep banking the dense per-step reward (the goal-terminate
+			// reward hack). Drill episodes instead run to the drill clock (ScoreboardTimeCondition hard-stops
+			// on ticksLeft <= 0), and a scored drill goal respawns to kickoff mid-episode (see Gym::Step) so
+			// the wheels see repeated goal events. Native (non-drill) episodes keep the goal-terminates rule.
+			if (currentState.drillActive)
+				return false;
 			if (targetGoals > 0) {
 				for (int i = 0; i < 2; i++) {
 					if (currentState.scoreLine[i] >= targetGoals) {

@@ -16,6 +16,10 @@ namespace RLGSC {
 		};
 
 		virtual bool IsTerminal(const GameState& currentState) {
+			// On a curriculum DRILL episode the drill clock (ScoreboardTimeCondition) is the sole end
+			// condition; the no-touch timeout must not truncate a breakaway before the bot reaches the ball.
+			if (currentState.drillActive)
+				return false;
 			for (auto& player : currentState.players) {
 				if (player.ballTouchedStep) {
 					stepsSinceTouch = 0;
