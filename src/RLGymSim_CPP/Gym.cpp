@@ -102,24 +102,42 @@ namespace RLGSC {
 		bool done = match->IsDone(prevState);
 		FList rewards = match->GetRewards(prevState, done);
 
-		// Curriculum drill: a goal does NOT end the episode (the goal is the objective, not a terminal
-		// condition). GameState::UpdateFromArena detects goals by ball POSITION, so a ball resting in the
-		// net would re-increment scoreLine every tick; return it to the drill spawn (which also lets the
-		// curriculum wheels see repeated goal events) and re-sync prevState so the next step starts from
-		// the spawn. The clock fields are saved/restored so the extra UpdateFromArena does not double-
-		// decrement the drill clock. obs/rewards above already saw the ball in the net, so the goal is
-		// both observed and credited before the respawn.
-		if (prevState.drillActive && (prevState.goalScored[0] || prevState.goalScored[1])) {
-			float savedTicksLeft = prevState.ticksLeft;
-			bool savedFinished = prevState.finished;
-			bool savedOvertime = prevState.isOvertime;
-			uint64_t savedLastTickCount = prevState.lastTickCount;
-			match->stateSetter->RespawnAfterGoal(arena);
-			prevState.UpdateFromArena(arena);
-			prevState.ticksLeft = savedTicksLeft;
-			prevState.finished = savedFinished;
-			prevState.isOvertime = savedOvertime;
-			prevState.lastTickCount = savedLastTickCount;
+		// Post-goal respawn: a goal does NOT end the episode on either the curriculum DRILL path or the
+		// native FULL-MATCH path. GameState::UpdateFromArena detects goals by ball POSITION, so a ball
+		// resting in the net would re-increment scoreLine every tick; the respawn returns it to a spawn
+		// (drill spawn / kickoff) so the next step starts clean and the goal is observed once, then re-syncs
+		// prevState. The clock fields are saved/restored so the extra UpdateFromArena does not double-
+		// decrement the match clock (OT timing depends on the clock surviving the respawn). obs/rewards
+		// above already saw the ball in the net, so the goal is both observed and credited before the respawn.
+		//   * drill  -> re-apply the drill spawn (boost resets to the kickoff value, see ApplyDrillSpawn).
+		//   * native -> ResetToRandomKickoff (repositions cars+ball, resets boost to carSpawnBoostAmount ~33
+		//     and empties boost pads, exactly like a live kickoff) so the match runs to the clock with
+		//     multiple goals, which is what lets the profile tracker accumulate multi-goal history.
+		if (prevState.goalScored[0] || prevState.goalScored[1]) {
+			if (prevState.drillActive) {
+				float savedTicksLeft = prevState.ticksLeft;
+				bool savedFinished = prevState.finished;
+				bool savedOvertime = prevState.isOvertime;
+				uint64_t savedLastTickCount = prevState.lastTickCount;
+				match->stateSetter->RespawnAfterGoal(arena);
+				prevState.UpdateFromArena(arena);
+				prevState.ticksLeft = savedTicksLeft;
+				prevState.finished = savedFinished;
+				prevState.isOvertime = savedOvertime;
+				prevState.lastTickCount = savedLastTickCount;
+			}
+			else if (match->fullMatch) {
+				float savedTicksLeft = prevState.ticksLeft;
+				bool savedFinished = prevState.finished;
+				bool savedOvertime = prevState.isOvertime;
+				uint64_t savedLastTickCount = prevState.lastTickCount;
+				arena->ResetToRandomKickoff();
+				prevState.UpdateFromArena(arena);
+				prevState.ticksLeft = savedTicksLeft;
+				prevState.finished = savedFinished;
+				prevState.isOvertime = savedOvertime;
+				prevState.lastTickCount = savedLastTickCount;
+			}
 		}
 
 		return StepResult {

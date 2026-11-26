@@ -8,8 +8,14 @@ namespace RLGSC {
 	class ScoreboardGoalCondition : public TerminalCondition {
 	public:
 		int targetGoals; // number of goals to reach (0 = never terminate on score)
+		bool fullMatch;  // native (non-drill) episodes play to the clock: a goal respawns to kickoff (see
+		                 // Gym::Step) instead of terminating, so the match runs to expiry with multiple goals.
+		                 // This is what lets the profile tracker accumulate multi-goal history (its EMAs +
+		                 // pseudo-count features need several goals to leave the neutral prior). Default false
+		                 // keeps the cheap goal-terminating objective available when the curriculum is off.
 
-		ScoreboardGoalCondition(int targetGoals = 0) : targetGoals(targetGoals) {}
+		ScoreboardGoalCondition(int targetGoals = 0, bool fullMatch = false)
+			: targetGoals(targetGoals), fullMatch(fullMatch) {}
 
 		void Reset(const GameState& initialState) override {
 			TerminalCondition::Reset(initialState);
@@ -20,8 +26,13 @@ namespace RLGSC {
 			// a goal lets the agent avoid scoring to keep banking the dense per-step reward (the goal-terminate
 			// reward hack). Drill episodes instead run to the drill clock (ScoreboardTimeCondition hard-stops
 			// on ticksLeft <= 0), and a scored drill goal respawns to kickoff mid-episode (see Gym::Step) so
-			// the wheels see repeated goal events. Native (non-drill) episodes keep the goal-terminates rule.
+			// the wheels see repeated goal events.
 			if (currentState.drillActive)
+				return false;
+			// Native FULL-MATCH episode: a goal respawns to kickoff (see Gym::Step) and the match runs to the
+			// clock, so the goal must NOT terminate. This is what lets the profile tracker accumulate
+			// multi-goal history. When fullMatch is false, native episodes keep the goal-terminates rule.
+			if (fullMatch)
 				return false;
 			if (targetGoals > 0) {
 				for (int i = 0; i < 2; i++) {

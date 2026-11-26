@@ -22,6 +22,11 @@ namespace RLGSC {
 		bool spawnOpponents;
 		int playerAmount;
 
+		// Native full-match flag: when true, a goal on a non-drill episode respawns to kickoff (see Gym::Step)
+		// instead of terminating, so the match runs to the clock with multiple goals. Mirrors the goal
+		// condition's fullMatch; Gym::Step reads it to decide whether to do the native kickoff respawn.
+		bool fullMatch;
+
 		ActionSet prevActions;
 
 		Match(
@@ -31,8 +36,9 @@ namespace RLGSC {
 			ActionParser* actionParser,
 			StateSetter* stateSetter,
 			int teamSize = 1,
-			bool spawnOpponents = true
-		) : 
+			bool spawnOpponents = true,
+			bool fullMatch = false
+		) :
 			rewardFn(rewardFn),
 			terminalConditions(terminalConditions),
 			obsBuilder(obsBuilder),
@@ -40,7 +46,8 @@ namespace RLGSC {
 			stateSetter(stateSetter),
 			teamSize(teamSize),
 			spawnOpponents(spawnOpponents),
-			playerAmount(teamSize * (spawnOpponents ? 2 : 1))
+			playerAmount(teamSize * (spawnOpponents ? 2 : 1)),
+			fullMatch(fullMatch)
 		{
 			prevActions.resize(playerAmount);
 		}

@@ -131,7 +131,7 @@ namespace RLGSC {
 			lastGoalFire = goalFire;
 			lastTouchFire = touchFire;
 			if (drill)
-				ApplyDrillSpawn(arena, goalFire, touchFire, /*preserveBoost=*/false);
+				ApplyDrillSpawn(arena, goalFire, touchFire);
 
 			// 6. Capture the state, stamp the per-episode owner map + clock cap (drill vs native).
 			GameState state(arena);
@@ -145,18 +145,21 @@ namespace RLGSC {
 		// Mid-episode respawn after a drill goal: re-apply the same drill spawn (ball + cars) so the ball
 		// leaves the net. GameState::UpdateFromArena detects goals by ball POSITION, so a ball resting in
 		// the net would re-increment scoreLine every tick; returning it to the drill spawn both fixes that
-		// and lets the curriculum wheels observe repeated goal events. Boost is preserved (a goal must not
-		// hand out free boost). No-op when the last reset was not a drill.
+		// and lets the curriculum wheels observe repeated goal events. Boost is RESET to the kickoff value
+		// (BOOST_SPAWN_AMOUNT ~33) on respawn, matching a live kickoff: preserving the car's drained boost
+		// would create a train/inference mismatch (the bot sees boost it never has at kickoff in live play).
+		// No-op when the last reset was not a drill.
 		virtual void RespawnAfterGoal(Arena* arena) override {
 			if (!lastGoalFire && !lastTouchFire)
 				return;
-			ApplyDrillSpawn(arena, lastGoalFire, lastTouchFire, /*preserveBoost=*/true);
+			ApplyDrillSpawn(arena, lastGoalFire, lastTouchFire);
 		}
 
 	private:
-		// Shared drill spawn geometry, used by ResetState (fresh cars, boost 0) and RespawnAfterGoal
-		// (mid-episode, boost preserved). Exactly mirrors the original inline spawn.
-		void ApplyDrillSpawn(Arena* arena, bool goalFire, bool touchFire, bool preserveBoost) {
+		// Shared drill spawn geometry, used by ResetState and RespawnAfterGoal. Cars spawn with the default
+		// CarState boost (BOOST_SPAWN_AMOUNT ~33), so a fresh spawn and a mid-episode respawn both reset
+		// boost to the kickoff value. Exactly mirrors the original inline spawn.
+		void ApplyDrillSpawn(Arena* arena, bool goalFire, bool touchFire) {
 			if (goalFire) {
 				// GOAL drill: ball on the lone (BLUE) car's attack axis at +goal_ball_y, still; car behind
 				// the ball (smaller y) facing +y toward it. The opponent's absence is the binary difficulty.
@@ -179,8 +182,6 @@ namespace RLGSC {
 					cs.vel = fwd * SPAWN_APPROACH_SPEED;
 					cs.angVel = Vec(0.0f, 0.0f, 0.0f);
 					cs.rotMat = rot;
-					if (preserveBoost)
-						cs.boost = car->GetState().boost;
 					car->SetState(cs);
 				}
 			} else if (touchFire) {
@@ -204,8 +205,6 @@ namespace RLGSC {
 					cs.vel = fwd * SPAWN_APPROACH_SPEED;
 					cs.angVel = Vec(0.0f, 0.0f, 0.0f);
 					cs.rotMat = rot;
-					if (preserveBoost)
-						cs.boost = car->GetState().boost;
 					car->SetState(cs);
 				}
 			}
