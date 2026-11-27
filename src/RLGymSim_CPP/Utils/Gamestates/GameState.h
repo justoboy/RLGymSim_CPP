@@ -79,6 +79,12 @@ namespace RLGSC {
 	// A native episode keeps the full regulation cap and the normal tie->overtime behavior.
 	float maxTimeSeconds = CommonValues::kMaxTimeSeconds;
 	bool drillActive = false;
+	// Non-drill HARD-finish flag (the phase-2 1v1 duel scaffold). The duel is a NATIVE kickoff (drillActive
+	// false, so a goal respawns to kickoff and the spawn stays native) but carries a short clock cap
+	// (duel_time, e.g. 30s) that must HARD-finish with NO overtime, so an idling bot can't run a full
+	// 14400-tick match. The clock treats (drillActive || hardFinish) as "capped -> hard-stop on expiry";
+	// an uncapped native episode (both false) keeps the normal tie->overtime behavior.
+	bool hardFinish = false;
 
 		// Dropshot tile damage grid (raw damage levels FULL=0/DAMAGED=1/BROKEN=2), flattened
 		// [team][tile] = 2*70 = 140 cells. Zeroed for non-dropshot modes.

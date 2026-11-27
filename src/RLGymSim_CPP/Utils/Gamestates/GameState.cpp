@@ -142,9 +142,10 @@ void RLGSC::GameState::UpdateFromArena(Arena* arena) {
 	// --- Pseudo-match clock (mirrors reference Scoreboard SharedInfoProvider) ---
 	// First update (lastTickCount == 0): initialize the clock to THIS episode's regulation cap
 	// (maxTimeSeconds, stamped by the active-set setter: drill_time on a drill episode, native otherwise).
-	// Subsequent updates count it down by the elapsed ticks; on expiry: a DRILL episode hard-stops
-	// (finished, no overtime) so 1v0 drill episodes terminate on goal OR drill-time; a native episode keeps
-	// the normal tie->overtime (+inf) / non-tie->finished (-inf) behavior. A goal while overtime ends the game.
+	// Subsequent updates count it down by the elapsed ticks; on expiry: a CAPPED episode (a DRILL, or the
+	// non-drill phase-2 duel flagged hardFinish) hard-stops (finished, no overtime) so the short cap actually
+	// ends the cheap episode; an uncapped native episode keeps the normal tie->overtime (+inf) / non-tie->
+	// finished (-inf) behavior. A goal while overtime ends the game.
 	if (lastTickCount == 0) {
 		ticksLeft = maxTimeSeconds * CommonValues::kTicksPerSecond;
 		isOvertime = false;
@@ -153,7 +154,7 @@ void RLGSC::GameState::UpdateFromArena(Arena* arena) {
 		if (!isOvertime && !finished) {
 			ticksLeft -= (float)tickSkip;
 			if (ticksLeft <= 0.0f) {
-				if (drillActive) { ticksLeft = -CommonValues::kInf; finished = true; }
+				if (drillActive || hardFinish) { ticksLeft = -CommonValues::kInf; finished = true; }
 				else if (scoreLine[0] == scoreLine[1]) { ticksLeft = CommonValues::kInf; isOvertime = true; }
 				else { ticksLeft = -CommonValues::kInf; finished = true; }
 			}
