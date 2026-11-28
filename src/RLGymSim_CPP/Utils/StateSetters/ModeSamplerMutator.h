@@ -21,55 +21,60 @@ namespace RLGSC {
 		GameMode mode = GameMode::SOCCAR;
 	};
 
-	// Mutable holder for the TWO-WHEEL spawn curriculum (read by TeamConfigMutator on every reset).
-	// Two INDEPENDENT wheels (touch + goal), each with its own state machine living in the driver. The
-	// driver advances each wheel's streak/score per EPOCH and writes the resulting per-wheel geometry +
-	// fire-probability here; the mutator then rolls each drill's Bernoulli PER EPISODE (the C++ learner
-	// auto-resets games internally, so the per-episode decision lives in the mutator, not the driver).
-	//   touch_enabled/touch_d/touch_prob: touch wheel FADING (drill may fire), car->ball distance, fire prob.
-	//   goal_enabled/goal_ball_y/goal_prob: goal wheel FADING, ball |y| on the lone car's attack axis, fire prob.
-	//   drill_time: episode clock cap (seconds) while any drill is active (short = cheap collection).
-	//   phase1_active: the touch or goal wheel is not OFF (the run is in the 1v0 phase-1 curriculum). When
-	//     true and neither drill fires this episode, the mutator uses the 1v0 GATE fallback (a lone car at
-	//     kickoff distance behind a center ball, drillActive so a goal does not terminate) — the episode the
-	//     wheel's GATE is measured on. When false the episode is a native 1v1 kickoff (phase 2 duel or 3).
-	//   duel_time: NON-drill episode clock cap (seconds) for the phase-2 1v1 duel scaffold. When >= 0 (and
-	//     no drill fires) the spawn stays a native 1v1 kickoff but the clock HARD-finishes here with no
-	//     overtime, so an idling bot can't run a full match. Negative = unset (native full match).
-	// A wheel in GATE/OFF has its drill suppressed (enabled=false), so its drill never fires.
-	struct WheelHolder {
-		bool  touch_enabled = false;
-		float touch_d       = 400.0f;
-		float touch_prob    = 0.5f;
-		bool  goal_enabled  = false;
-		float goal_ball_y   = 0.0f;
-		float goal_prob     = 0.5f;
-		float drill_time    = 10.0f;  // clock cap (s) while a drill is active
-		float native_time   = 300.0f; // clock cap (s) on a native (non-drill) episode
-		bool  phase1_active = false;  // touch or goal wheel not OFF -> 1v0 phase-1 curriculum
-		float duel_time     = -1.0f;  // non-drill duel clock cap (s); <0 = unset (native full match)
+	// ---- Data-driven drill curriculum (replaces the old fixed two-wheel WheelHolder) ----
+	//
+	// The driver owns the curriculum's phase state machine and advances it per EPOCH, then pushes the
+	// resolved drill specs onto every live env via Learner::SetDrillConfig. The mutator evaluates the
+	// spec list PER EPISODE (the C++ learner auto-resets games internally, so the per-episode decision
+	// lives here, not in the driver): the FIRST enabled spec spawns the episode; none enabled => native
+	// kickoff. The C++ side is intentionally dumb: it never interpolates difficulty, never rolls fire
+	// probabilities (always-drill: an enabled spec fires), and never knows what a "phase" is. Geometry
+	// ranges, thresholds, and phase ordering are all driver/JSON concerns.
+	enum class DrillSpawnType : int {
+		NATIVE_KICKOFF = 0,  // arena->ResetToRandomKickoff (the duel phase uses this with a clock cap)
+		TOUCH = 1,           // ball at center; each car at car_dist along the kickoff axis facing it
+		GOAL_BREAKAWAY = 2,  // 1v0: ball at +ball_y on the lone car's attack axis, car car_dist behind it
 	};
 
-	// Custom-spawn geometry (mirrors the reference scaffold constants).
-	inline constexpr float SPAWN_MIN_DIST = 400.0f;     // ball basically on the car (touch g=1)
-	inline constexpr float SPAWN_MAX_DIST = 4000.0f;    // real kickoff gap (touch g=0)
-	inline constexpr float SPAWN_APPROACH_SPEED = 1000.0f; // initial car speed (uu/s) aimed at the ball
+	struct DrillSpec {
+		DrillSpawnType spawn_type = DrillSpawnType::NATIVE_KICKOFF;
+		bool  enabled     = false;   // false => skipped this epoch (the driver gates phases here)
+		int   n_blue      = -1;      // lineup override; -1 => keep the sampled lineup
+		int   n_orange    = -1;
+		float car_dist    = 400.0f;  // TOUCH: car->ball gap; GOAL_BREAKAWAY: car stand-off behind ball
+		                             // (each drill owns its OWN distance param — no cross-drill sharing)
+		float ball_y      = 0.0f;    // GOAL_BREAKAWAY: ball |y| on the lone car's attack axis
+		float clock_cap   = -1.0f;   // >= 0: per-episode clock cap (s); < 0 => holder native_time
+		bool  hard_finish = false;   // capped native-type episode hard-stops on expiry (no OT)
+	};
 
-	// TeamConfigMutator: per-episode active-set spawner + matchup sampler + two-wheel drill override.
+	struct DrillHolder {
+		std::vector<DrillSpec> drills;  // evaluated in order; first enabled wins
+		float native_time     = 300.0f; // clock cap (s) on a native (non-drill) episode
+		float native_fraction = 0.0f;   // fraction of drill-phase episodes that use native kickoff
+		                                // instead of the active drill (0 = always drill; the default)
+	};
+
+	// Initial car speed (uu/s) aimed at the ball on custom spawns.
+	inline constexpr float SPAWN_APPROACH_SPEED = 1000.0f;
+
+	// TeamConfigMutator: per-episode active-set spawner + matchup sampler + data-driven drill override.
 	//
-	// Faithful port of the reference TeamConfigMutator + SpawnCurriculumMutator. The C++ learner auto-resets
-	// each game internally (the driver only sees per-EPOCH aggregate reports), so the per-episode drill
-	// Bernoulli lives HERE in the mutator, not in the driver: on every reset it
-	// (1) samples one (n_blue, n_orange) from the weighted pool (the native/touch lineup),
-	// (2) rolls each wheel's per-episode Bernoulli from the holder's prob,
-	// (3) on a GOAL drill forces a 1v0 lineup (single BLUE car) and writes the ball at +goal_ball_y on the
-	//     lone car's attack axis, car behind the ball facing it; on a TOUCH drill keeps the sampled lineup
-	//     and places each car at distance d from the center ball facing it; otherwise native kickoff,
-	// (4) stamps the per-episode clock cap (drill_time on a drill, native_time otherwise) + drillActive flag,
+	// The C++ learner auto-resets each game internally (the driver only sees per-EPOCH aggregate reports),
+	// so the per-episode spawn decision lives HERE in the mutator, not in the driver: on every reset it
+	// (1) samples one (n_blue, n_orange) from the weighted pool (the native / touch-drill lineup),
+	// (2) picks the FIRST enabled DrillSpec in the holder (always-drill: an enabled spec fires; none
+	//     enabled => native kickoff), honoring the holder's native_fraction escape hatch,
+	// (3) applies the spawn: NATIVE_KICKOFF leaves the sampled lineup + random kickoff intact; TOUCH keeps
+	//     the lineup and places each car at car_dist from the center ball facing it; GOAL_BREAKAWAY forces
+	//     the spec's lineup (1v0) and writes the ball at +ball_y on the lone car's attack axis, car
+	//     car_dist behind the ball facing it (the car distance is the spec's OWN param — no cross-drill
+	//     sharing),
+	// (4) stamps the per-episode clock cap (spec clock_cap, else holder native_time) + drillActive flag
+	//     (drillActive for TOUCH/GOAL so goals respawn instead of terminating; hard_finish for a capped
+	//     native-type episode, e.g. the duel, so it ends on expiry with no overtime),
 	// (5) stamps the per-episode owner map into GameState::slotOwners.
 	//
-	// The driver advances each wheel's streak/score state machine per EPOCH and writes the resulting geometry
-	// + fire-probability into the shared WheelHolder (SetWheelConfig); the mutator reads that holder here.
 	// A single-bot self-play run is the degenerate case: one member, siblingFraction 0, every slot owned by
 	// member 0; the goal drill's lone car is BLUE (attacks +y), the touch drill keeps the sampled matchup.
 	class TeamConfigMutator : public StateSetter {
@@ -81,21 +86,20 @@ namespace RLGSC {
 		int memberCount = 1;
 		// Fraction of episodes that draw a mixed-lineage (sibling) matchup vs. all-slots-one-bot self.
 		float siblingFraction = 0.0f;
-		// Two-wheel curriculum holder (nullptr => always native kickoff).
-		WheelHolder* wheel = nullptr;
+		// Drill curriculum holder (nullptr => always native kickoff).
+		DrillHolder* drill = nullptr;
 		std::mt19937 rng;
-		// Which spawn was used on the most recent ResetState; RespawnAfterGoal re-applies the same spawn so a
-		// mid-episode drill goal returns the ball to the drill spawn instead of resting in the net.
-		bool lastGoalFire = false;
-		bool lastTouchFire = false;
-		bool lastGateFallback = false;
+		// The spec used on the most recent ResetState (nullptr = native kickoff); RespawnAfterGoal
+		// re-applies the same spawn so a mid-episode drill goal returns the ball to the drill spawn
+		// instead of resting in the net.
+		const DrillSpec* lastSpec = nullptr;
 
 		TeamConfigMutator(const std::vector<std::pair<int, int>>& configs,
 		                  const std::vector<float>& weights,
 		                  int memberCount, float siblingFraction, uint32_t seed,
-		                  WheelHolder* wheel = nullptr)
+		                  DrillHolder* drill = nullptr)
 			: teamConfigs(configs), teamWeights(weights),
-			  memberCount(memberCount), siblingFraction(siblingFraction), wheel(wheel), rng(seed) {
+			  memberCount(memberCount), siblingFraction(siblingFraction), drill(drill), rng(seed) {
 			assert(teamConfigs.size() == teamWeights.size());
 			assert(memberCount >= 1);
 		}
@@ -105,21 +109,22 @@ namespace RLGSC {
 			std::discrete_distribution<int> cfgDist(teamWeights.begin(), teamWeights.end());
 			auto [nBlue, nOrange] = teamConfigs[cfgDist(rng)];
 
-			// 2. Phase decision. phase1 = the touch or goal wheel is not OFF (the run is in the 1v0
-			//    phase-1 curriculum). Only then do the drill Bernoullis roll; in phase 2/3 no drill fires
-			//    and the episode is a native 1v1 kickoff. GOAL-FIRST PRECEDENCE: when both drills would
-			//    fire the goal (1v0) drill wins (the touch drill works in 1v1 but the goal drill needs 1v0).
-			bool phase1 = wheel && wheel->phase1_active;
-			bool touchFire = phase1 && wheel->touch_enabled
-				&& std::uniform_real_distribution<float>(0.0f, 1.0f)(rng) < wheel->touch_prob;
-			bool goalFire  = phase1 && wheel->goal_enabled
-				&& std::uniform_real_distribution<float>(0.0f, 1.0f)(rng) < wheel->goal_prob;
-			if (goalFire) touchFire = false;          // goal-first precedence
-			bool gateFallback = phase1 && !goalFire && !touchFire;  // the GATE episode: hardest 1v0
+			// 2. Pick the active spec: the FIRST enabled one, unless the holder's native_fraction roll
+			//    (default 0 => always drill) escapes to a native kickoff this episode.
+			const DrillSpec* spec = nullptr;
+			if (drill) {
+				for (const auto& s : drill->drills)
+					if (s.enabled) { spec = &s; break; }
+				if (spec && drill->native_fraction > 0.0f
+					&& std::uniform_real_distribution<float>(0.0f, 1.0f)(rng) < drill->native_fraction)
+					spec = nullptr;
+			}
 
-			// 3. Lineup. Phase 1 is ALWAYS 1v0 (a keeper would dilute the goal wheel's gate metric); the
-			//    sampled lineup is used only in phase 2/3 (the native 1v1 duel / full match).
-			if (phase1) { nBlue = 1; nOrange = 0; }
+			// 3. Lineup override from the spec (e.g. the goal breakaway forces 1v0); -1 keeps the sample.
+			if (spec) {
+				if (spec->n_blue   >= 0) nBlue   = spec->n_blue;
+				if (spec->n_orange >= 0) nOrange = spec->n_orange;
+			}
 			int n = nBlue + nOrange;
 
 			// 4. Build the per-slot owner list (blue-first slot order). Self-play: every slot -> member 0.
@@ -142,66 +147,57 @@ namespace RLGSC {
 				arena->AddCar(Team::ORANGE, CAR_CONFIG_OCTANE);
 
 			// 6. Native random kickoff repositions the now-existing cars + ball (overridden below on a
-			//    drill / gate fallback; left intact for the phase-2 duel and phase-3 native kickoff). It
-			//    also sets each car's boost to the engine's kickoff default (the live-inference value).
+			//    TOUCH/GOAL spec; left intact for NATIVE_KICKOFF specs like the duel and for native
+			//    episodes). It also sets each car's boost to the engine's kickoff default.
 			arena->ResetToRandomKickoff();
 
-			bool drill = goalFire || touchFire || gateFallback;
-			lastGoalFire = goalFire;
-			lastTouchFire = touchFire;
-			lastGateFallback = gateFallback;
-			if (goalFire || touchFire)
-				ApplyDrillSpawn(arena, goalFire, touchFire);
-			else if (gateFallback)
-				ApplyGateFallback(arena);
+			bool drillActive = false;
+			if (spec && spec->spawn_type != DrillSpawnType::NATIVE_KICKOFF) {
+				ApplyDrillSpawn(arena, *spec);
+				drillActive = true;
+			}
+			lastSpec = drillActive ? spec : nullptr;
 
 			// 7. Capture the state, stamp the per-episode owner map + clock cap + hard-finish flag.
-			//    drill (touch/goal/gate) -> short drill_time hard-stop; phase-2 duel -> duel_time hard-stop
-			//    (no OT, but NOT drillActive so a goal respawns to kickoff); phase-3 native -> full match.
+			//    drill (TOUCH/GOAL) -> spec clock cap (drillActive already forces the hard-stop on expiry);
+			//    capped native-type spec (the duel) -> hard_finish, no OT, goals respawn to kickoff;
+			//    uncapped native -> full match with OT on a tie.
 			GameState state(arena);
 			state.slotOwners = botIds;
-			state.drillActive = drill;
-			if (drill) {
-				state.maxTimeSeconds = wheel ? wheel->drill_time : CommonValues::kMaxTimeSeconds;
-				state.hardFinish = false;   // drillActive already forces the hard-stop
-			}
-			else if (wheel && wheel->duel_time >= 0.0f) {
-				state.maxTimeSeconds = wheel->duel_time;   // phase-2 1v1 duel: hard-finish, no OT
-				state.hardFinish = true;
+			state.drillActive = drillActive;
+			if (spec && spec->clock_cap >= 0.0f) {
+				state.maxTimeSeconds = spec->clock_cap;
+				state.hardFinish = !drillActive && spec->hard_finish;
 			}
 			else {
-				state.maxTimeSeconds = wheel ? wheel->native_time : CommonValues::kMaxTimeSeconds;
-				state.hardFinish = false;   // phase-3 native: full match, OT on a tie
+				state.maxTimeSeconds = drill ? drill->native_time : CommonValues::kMaxTimeSeconds;
+				state.hardFinish = false;
 			}
 			return state;
 		}
 
-		// Mid-episode respawn after a drill (or gate-fallback) goal: re-apply the same spawn (ball + cars)
-		// so the ball leaves the net. GameState::UpdateFromArena detects goals by ball POSITION, so a ball
-		// resting in the net would re-increment scoreLine every tick; returning it to the drill spawn both
-		// fixes that and lets the curriculum wheels observe repeated goal events. Boost is RESET to the
-		// engine's kickoff value on respawn (see ApplyDrillSpawn / ApplyGateFallback), matching a live
-		// kickoff: preserving the car's drained boost would create a train/inference mismatch. No-op when
-		// the last reset was not a drill / gate fallback (a native kickoff goal is respawned by Gym::Step).
+		// Mid-episode respawn after a drill goal: re-apply the same spawn (ball + cars) so the ball leaves
+		// the net. GameState::UpdateFromArena detects goals by ball POSITION, so a ball resting in the net
+		// would re-increment scoreLine every tick; returning it to the drill spawn both fixes that and lets
+		// the curriculum observe repeated goal events. Boost is RESET to the engine's kickoff value on
+		// respawn (see ApplyDrillSpawn), matching a live kickoff: preserving the car's drained boost would
+		// create a train/inference mismatch. No-op when the last reset was not a drill (a native kickoff
+		// goal is respawned by Gym::Step).
 		virtual void RespawnAfterGoal(Arena* arena) override {
-			if (lastGateFallback) {
-				ApplyGateFallback(arena);
+			if (!lastSpec)
 				return;
-			}
-			if (!lastGoalFire && !lastTouchFire)
-				return;
-			ApplyDrillSpawn(arena, lastGoalFire, lastTouchFire);
+			ApplyDrillSpawn(arena, *lastSpec);
 		}
 
 	private:
-		// Shared drill spawn geometry, used by ResetState and RespawnAfterGoal. Cars spawn with the default
-		// CarState boost (BOOST_SPAWN_AMOUNT ~33), so a fresh spawn and a mid-episode respawn both reset
-		// boost to the kickoff value. Exactly mirrors the original inline spawn.
-		void ApplyDrillSpawn(Arena* arena, bool goalFire, bool touchFire) {
-			if (goalFire) {
-				// GOAL drill: ball on the lone (BLUE) car's attack axis at +goal_ball_y, still; car behind
-				// the ball (smaller y) facing +y toward it. The opponent's absence is the binary difficulty.
-				float by = wheel->goal_ball_y;
+		// Shared drill spawn geometry, used by ResetState and RespawnAfterGoal. Cars spawn with the
+		// engine's kickoff boost, so a fresh spawn and a mid-episode respawn both reset boost.
+		void ApplyDrillSpawn(Arena* arena, const DrillSpec& spec) {
+			if (spec.spawn_type == DrillSpawnType::GOAL_BREAKAWAY) {
+				// GOAL drill: ball on the lone (BLUE) car's attack axis at +ball_y, still; car behind the
+				// ball (smaller y) facing +y toward it at the spec's OWN car_dist. The opponent's absence
+				// (spec lineup 1v0) is the binary difficulty.
+				float by = spec.ball_y;
 				BallState bs = {};
 				bs.pos = Vec(0.0f, by, CommonValues::BALL_RADIUS);
 				bs.vel = Vec(0.0f, 0.0f, 0.0f);
@@ -210,22 +206,21 @@ namespace RLGSC {
 
 				Car* car = arena->_cars.empty() ? nullptr : *arena->_cars.begin();
 				if (car) {
-					float d = wheel->touch_d;
 					Vec fwd(0.0f, 1.0f, 0.0f);                 // lone BLUE car attacks +y (toward the ball)
 					Vec up(0.0f, 0.0f, 1.0f);
 					Vec right = up.Cross(fwd);
 					RotMat rot(fwd, right, up);
 					CarState cs = {};
-					cs.pos = Vec(0.0f, by - d, RLConst::CAR_SPAWN_REST_Z); // behind the ball (farther from goal)
+					cs.pos = Vec(0.0f, by - spec.car_dist, RLConst::CAR_SPAWN_REST_Z); // behind the ball
 					cs.vel = fwd * SPAWN_APPROACH_SPEED;
 					cs.angVel = Vec(0.0f, 0.0f, 0.0f);
 					cs.rotMat = rot;
 					cs.boost = arena->GetMutatorConfig().carSpawnBoostAmount; // kickoff boost, read from engine
 					car->SetState(cs);
 				}
-			} else if (touchFire) {
-				// TOUCH drill: ball at center, still; each car at distance d along the kickoff axis facing it.
-				float d = wheel->touch_d;
+			} else if (spec.spawn_type == DrillSpawnType::TOUCH) {
+				// TOUCH drill: ball at center, still; each car at spec.car_dist along the kickoff axis
+				// facing it.
 				BallState bs = {};
 				bs.pos = Vec(0.0f, 0.0f, CommonValues::BALL_RADIUS);
 				bs.vel = Vec(0.0f, 0.0f, 0.0f);
@@ -240,39 +235,13 @@ namespace RLGSC {
 					Vec right = up.Cross(fwd);
 					RotMat rot(fwd, right, up);
 					CarState cs = {};
-					cs.pos = Vec(0.0f, sgn * d, RLConst::CAR_SPAWN_REST_Z);
+					cs.pos = Vec(0.0f, sgn * spec.car_dist, RLConst::CAR_SPAWN_REST_Z);
 					cs.vel = fwd * SPAWN_APPROACH_SPEED;
 					cs.angVel = Vec(0.0f, 0.0f, 0.0f);
 					cs.rotMat = rot;
 					cs.boost = arena->GetMutatorConfig().carSpawnBoostAmount; // kickoff boost, read from engine
 					car->SetState(cs);
 				}
-			}
-		}
-
-		// GATE fallback spawn: the episode a wheel's GATE is measured on. A lone BLUE car at kickoff
-		// distance behind a still center ball (the hardest 1v0: a full kickoff gap to a dead ball).
-		// drillActive so a goal respawns (does not terminate); boost reset to the engine kickoff value.
-		void ApplyGateFallback(Arena* arena) {
-			BallState bs = {};
-			bs.pos = Vec(0.0f, 0.0f, CommonValues::BALL_RADIUS);
-			bs.vel = Vec(0.0f, 0.0f, 0.0f);
-			bs.angVel = Vec(0.0f, 0.0f, 0.0f);
-			arena->ball->SetState(bs);
-
-			Car* car = arena->_cars.empty() ? nullptr : *arena->_cars.begin();
-			if (car) {
-				Vec fwd(0.0f, 1.0f, 0.0f);                 // lone BLUE car attacks +y (toward the center ball)
-				Vec up(0.0f, 0.0f, 1.0f);
-				Vec right = up.Cross(fwd);
-				RotMat rot(fwd, right, up);
-				CarState cs = {};
-				cs.pos = Vec(0.0f, -SPAWN_MAX_DIST, RLConst::CAR_SPAWN_REST_Z); // full kickoff gap behind ball
-				cs.vel = fwd * SPAWN_APPROACH_SPEED;
-				cs.angVel = Vec(0.0f, 0.0f, 0.0f);
-				cs.rotMat = rot;
-				cs.boost = arena->GetMutatorConfig().carSpawnBoostAmount; // kickoff boost, read from engine
-				car->SetState(cs);
 			}
 		}
 	};
