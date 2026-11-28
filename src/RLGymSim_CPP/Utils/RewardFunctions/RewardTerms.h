@@ -55,7 +55,7 @@ namespace RLGSC {
 	// ============================================================================
 	class GoalTerm : public RewardTerm {
 	public:
-		GoalTerm() : RewardTerm("goal", true) {}
+		GoalTerm() : RewardTerm("goal", false) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
 			static thread_local float raw[1] = { 0.0f };
@@ -82,7 +82,7 @@ namespace RLGSC {
 	// ============================================================================
 	class WinProbTerm : public RewardTerm {
 	public:
-		WinProbTerm() : RewardTerm("win_prob", false) {}
+		WinProbTerm() : RewardTerm("win_prob", true) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
 			static thread_local float raw[1] = { 0.0f };
@@ -132,7 +132,7 @@ namespace RLGSC {
 	// ============================================================================
 	class ProximityTerm : public RewardTerm {
 	public:
-		ProximityTerm() : RewardTerm("proximity", false) {}
+		ProximityTerm() : RewardTerm("proximity", true) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
 			static thread_local float raw[1] = { 0.0f };
@@ -233,7 +233,7 @@ namespace RLGSC {
 	// ============================================================================
 	class GrassTerm : public RewardTerm {
 	public:
-		GrassTerm() : RewardTerm("grass", true) {}
+		GrassTerm() : RewardTerm("grass", false) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
 			static thread_local float raw[1] = { 0.0f };
@@ -279,7 +279,7 @@ namespace RLGSC {
 	// ============================================================================
 	class FlipResetTerm : public RewardTerm {
 	public:
-		FlipResetTerm() : RewardTerm("flip_reset", true) {}
+		FlipResetTerm() : RewardTerm("flip_reset", false) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
 			static thread_local float raw[1] = { 0.0f };
@@ -499,7 +499,7 @@ namespace RLGSC {
 	// ============================================================================
 	class DoubleTapTerm : public RewardTerm {
 	public:
-		DoubleTapTerm() : RewardTerm("double_tap", true) {}
+		DoubleTapTerm() : RewardTerm("double_tap", false) {}
 
 		float* computeRaw(const PlayerData& player, const GameState& state, const Action& prevAction) override {
 			static thread_local float raw[1] = { 0.0f };
